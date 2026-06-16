@@ -21,5 +21,6 @@ object ClaudeLauncher {
         val dir = project.basePath ?: System.getProperty("user.home")
         val widget = mgr.createLocalShellWidget(dir, "claude", true)
         runCatching { widget.executeCommand("clauded") }
+        TerminalJump.focusTerminal(project, widget)   // raise the IDE + focus so typing lands here
     }
 }

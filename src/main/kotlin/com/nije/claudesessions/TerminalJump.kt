@@ -66,6 +66,26 @@ object TerminalJump {
         runCatching { mgr.closeTab(content) }.onFailure { dbg("  closeTab failed: ${it.message}") }
     }
 
+    /** Bring the IDE forward and focus a freshly-spawned terminal widget so the user can
+     *  type immediately. Needed because the spawn is triggered from an external panel, so
+     *  the IDE isn't frontmost and the widget's in-IDE focus request alone isn't enough. */
+    fun focusTerminal(project: Project, widget: Any?) {
+        if (widget == null) return
+        val tw = ToolWindowManager.getInstance(project).getToolWindow("Terminal") ?: return
+        tw.activate({
+            activateThisApp()
+            val comp = focusableOf(widget) ?: componentOf(widget)
+            val win = comp?.let { javax.swing.SwingUtilities.getWindowAncestor(it) }
+            win?.toFront()
+            win?.requestFocus()
+            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                if (comp != null) {
+                    com.intellij.openapi.wm.IdeFocusManager.getInstance(project).requestFocus(comp, true)
+                }
+            }
+        }, true, true)
+    }
+
     // TerminalWidget extends ComponentContainer, so get its component/focusable directly.
     private fun componentOf(w: Any): java.awt.Component? =
         (w as? com.intellij.openapi.ui.ComponentContainer)?.component ?: (w as? java.awt.Component)
