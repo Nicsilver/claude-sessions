@@ -1,0 +1,19 @@
+<idea-plugin>
+    <id>com.nije.claude-sessions</id>
+    <name>Claude Sessions</name>
+    <vendor>nije</vendor>
+    <description><![CDATA[
+        Glanceable status for concurrent Claude Code sessions, with click-to-jump
+        to the terminal tab that needs you. Reads ~/.claude/session-status/state.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.plugins.terminal</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Claude Sessions" anchor="right" secondary="false"
+                    icon="AllIcons.Toolwindows.WebToolWindow"
+                    factoryClass="com.nije.claudesessions.SessionsToolWindowFactory"/>
+        <postStartupActivity implementation="com.nije.claudesessions.FocusWatcher"/>
+    </extensions>
+</idea-plugin>
