@@ -183,17 +183,19 @@ final class SessionRow: NSTableCellView {
 final class DecoRowView: NSTableRowView {
     var state: String = "" { didSet { if state != oldValue { needsDisplay = true } } }
     private var hovered = false { didSet { if hovered != oldValue { needsDisplay = true } } }
+    private var hoverX: CGFloat = 0   // cursor x within the row; the glow blooms from here
 
     // Per-row hover tracking so you can see which row you're about to click.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
         addTrackingArea(NSTrackingArea(rect: .zero,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
             owner: self, userInfo: nil))
     }
-    override func mouseEntered(with event: NSEvent) { hovered = true; NSCursor.pointingHand.set() }
+    override func mouseEntered(with event: NSEvent) { hovered = true; hoverX = convert(event.locationInWindow, from: nil).x; NSCursor.pointingHand.set(); needsDisplay = true }
     override func mouseExited(with event: NSEvent)  { hovered = false; NSCursor.arrow.set() }
+    override func mouseMoved(with event: NSEvent)   { hoverX = convert(event.locationInWindow, from: nil).x; if hovered { needsDisplay = true } }
 
     private func barRect() -> NSRect {
         let bh = max(10, bounds.height - 7)
@@ -244,8 +246,13 @@ final class DecoRowView: NSTableRowView {
     override func drawBackground(in dirtyRect: NSRect) {
         super.drawBackground(in: dirtyRect)
         if hovered {
-            NSColor.white.withAlphaComponent(0.07).setFill()
-            NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 1), xRadius: 6, yRadius: 6).fill()
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 1), xRadius: 6, yRadius: 6).addClip()
+            let c = NSPoint(x: hoverX, y: bounds.midY)   // bloom from the cursor, along the row
+            if let grad = NSGradient(colors: [NSColor.white.withAlphaComponent(0.13), NSColor.white.withAlphaComponent(0)]) {
+                grad.draw(fromCenter: c, radius: 0, toCenter: c, radius: 95, options: [])
+            }
+            NSGraphicsContext.restoreGraphicsState()
         }
         let col = style(state).color
         let active = isActive(state)
