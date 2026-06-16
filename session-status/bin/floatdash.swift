@@ -100,12 +100,24 @@ let GLOW_FRAC: CGFloat = 0.30     // glow stays clear until ~30% in, then blooms
 
 // MARK: - Row views
 
+/// A non-interactive label that never intercepts clicks, so clicking the row text still
+/// reaches the cell/table — required for single-click-through when the window is inactive.
+final class PassLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 final class SessionRow: NSTableCellView {
-    private let nameLabel = NSTextField(labelWithString: "")
-    private let metaLabel = NSTextField(labelWithString: "")
+    private let nameLabel = PassLabel()
+    private let metaLabel = PassLabel()
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        for l in [nameLabel, metaLabel] {
+            l.isEditable = false; l.isSelectable = false; l.isBezeled = false
+            l.isBordered = false; l.drawsBackground = false
+        }
         nameLabel.font = .systemFont(ofSize: NAME_SIZE, weight: .medium)
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.cell?.usesSingleLineMode = true
@@ -150,6 +162,8 @@ final class DecoRowView: NSTableRowView {
     var state: String = "" { didSet { if state != oldValue { needsDisplay = true } } }
     private var hovered = false { didSet { if hovered != oldValue { needsDisplay = true } } }
     private var hoverX: CGFloat = 0   // cursor x within the row; the glow blooms from here
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     // Per-row hover tracking so you can see which row you're about to click.
     override func updateTrackingAreas() {
@@ -203,6 +217,7 @@ final class DecoRowView: NSTableRowView {
 /// lets a click on empty list space drag the window (like the header/footer background).
 final class ClickTable: NSTableView {
     var onRightClick: ((Int) -> Void)?
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }   // respond to the first click even when inactive
     override func rightMouseDown(with event: NSEvent) {
         let r = row(at: convert(event.locationInWindow, from: nil))
         if r >= 0 { onRightClick?(r) } else { super.rightMouseDown(with: event) }
@@ -227,6 +242,8 @@ final class IconButton: NSView {
     private var hovered = false { didSet { needsDisplay = true } }
     override init(frame f: NSRect) { super.init(frame: f) }
     required init?(coder: NSCoder) { fatalError() }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseUp(with e: NSEvent) {
         if bounds.contains(convert(e.locationInWindow, from: nil)) { onClick?() }
