@@ -2,13 +2,12 @@
 //
 // Build:  swiftc -O floatdash.swift -o floatdash
 // Run:    ~/.claude/session-status/bin/floatdash >/dev/null 2>&1 &
-//   Pick a look:    floatdash --variant N
-//   Gallery tile:   floatdash --variant N --slot N --galleryOf TOTAL
 //
 // Pinned above all windows, on every Space, non-activating (clicking it won't steal
-// focus from your app). Lists every Claude session; CLICK a row to jump to its
-// terminal tab/pane (writes ~/.claude/session-status/focus-request.json, which the
-// IntelliJ plugin watches). Reads ~/.claude/session-status/state/*.json.
+// focus from your app). Lists every Claude session; LEFT-CLICK a row to jump to its
+// terminal tab/pane, RIGHT-CLICK to close it (writes ~/.claude/session-status/focus-request.json,
+// which the IntelliJ plugin watches). The "+" titlebar button spawns a new session.
+// Reads ~/.claude/session-status/state/*.json.
 import Cocoa
 import Darwin
 
@@ -86,55 +85,18 @@ func ageStr(_ ts: Double) -> String {
 
 func g(_ w: CGFloat) -> NSColor { NSColor(calibratedWhite: w, alpha: 1) }
 
-// MARK: - Theme
+// MARK: - Appearance & layout constants
 
-enum Wash { case none, flat, fade, sheen }
-
-struct Theme {
-    let name: String
-    let rowHeight: CGFloat
-    let glowRadius: CGFloat       // radial bloom radius (0 = no glow); shapeless, not pill-outlined
-    let glowAlpha: CGFloat
-    let glowBand: Bool            // soft vertical light band instead of a radial bloom
-    let wash: Wash
-    let washAlpha: CGFloat
-    let nameTint: Bool
-    let nameSize: CGFloat
-    let metaSize: CGFloat
-    let w: CGFloat
-    let h: CGFloat
-}
-
-private func T(_ name: String, rowHeight: CGFloat = 22, glowRadius: CGFloat = 14, glowAlpha: CGFloat = 0.5,
-               glowBand: Bool = false, wash: Wash = .fade, washAlpha: CGFloat = 0.09, nameTint: Bool = true,
-               nameSize: CGFloat = 11.5, metaSize: CGFloat = 10, w: CGFloat = 300, h: CGFloat = 270) -> Theme {
-    Theme(name: name, rowHeight: rowHeight, glowRadius: glowRadius, glowAlpha: glowAlpha, glowBand: glowBand,
-          wash: wash, washAlpha: washAlpha, nameTint: nameTint, nameSize: nameSize, metaSize: metaSize, w: w, h: h)
-}
-
-// Base = Glow Soft (fade wash + tinted name), text tight to the bar, and a SHAPELESS
-// radial bloom instead of the pill-shaped shadow. The 10 explore the bloom.
-let THEMES: [Theme] = [
-    T("Halo",   glowAlpha: 0.22, wash: .none, washAlpha: 0),         // 0 — the chosen look (default)
-]
-
-// argv: --variant, --slot, --galleryOf
-var VARIANT = 0, SLOT = -1, GALLERY = 0
-do {
-    let a = CommandLine.arguments
-    for (i, arg) in a.enumerated() where i + 1 < a.count {
-        if arg == "--variant" { VARIANT = Int(a[i + 1]) ?? 0 }
-        if arg == "--slot" { SLOT = Int(a[i + 1]) ?? -1 }
-        if arg == "--galleryOf" { GALLERY = Int(a[i + 1]) ?? 0 }
-    }
-}
-VARIANT = max(0, min(THEMES.count - 1, VARIANT))
-if SLOT < 0 { SLOT = VARIANT }
-let THEME = THEMES[VARIANT]
+let WIN_W: CGFloat = 300, WIN_H: CGFloat = 270
+let ROW_HEIGHT: CGFloat = 22
+let NAME_SIZE: CGFloat = 11.5
+let META_SIZE: CGFloat = 10
+let NAME_TINT = true              // colour the name in the state colour on active rows
+let GLOW_ALPHA: CGFloat = 0.22    // peak opacity of the per-row state glow
 
 let BAR_X: CGFloat = 7, BAR_W: CGFloat = 3
-let NAME_LEADING: CGFloat = 14   // ≈4pt gap off the bar
-let GLOW_FRAC: CGFloat = 0.30    // bloom begins ~30% into the row, not at the bar
+let NAME_LEADING: CGFloat = 14    // ≈4pt gap off the bar
+let GLOW_FRAC: CGFloat = 0.30     // glow stays clear until ~30% in, then blooms to the right edge
 
 // MARK: - Row views
 
@@ -144,14 +106,14 @@ final class SessionRow: NSTableCellView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        nameLabel.font = .systemFont(ofSize: THEME.nameSize, weight: .medium)
+        nameLabel.font = .systemFont(ofSize: NAME_SIZE, weight: .medium)
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.cell?.usesSingleLineMode = true
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         nameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        metaLabel.font = .systemFont(ofSize: THEME.metaSize, weight: .regular)
+        metaLabel.font = .systemFont(ofSize: META_SIZE, weight: .regular)
         metaLabel.textColor = .secondaryLabelColor
         metaLabel.lineBreakMode = .byTruncatingTail
         metaLabel.cell?.usesSingleLineMode = true
@@ -174,7 +136,7 @@ final class SessionRow: NSTableCellView {
 
     func configure(_ s: Sess) {
         nameLabel.stringValue = s.topic
-        nameLabel.textColor = (THEME.nameTint && isActive(s.state)) ? style(s.state).color : .labelColor
+        nameLabel.textColor = (NAME_TINT && isActive(s.state)) ? style(s.state).color : .labelColor
         var parts: [String] = []
         if s.tty.isEmpty { parts.append("IDE") }
         let age = ageStr(s.updated)
@@ -207,21 +169,7 @@ final class DecoRowView: NSTableRowView {
     }
 
     private func drawGlow(_ col: NSColor, _ active: Bool) {
-        let a = THEME.glowAlpha * (active ? 1 : 0.30)
-        guard a > 0 else { return }
-        if THEME.glowBand {
-            // Soft vertical light band centred at GLOW_FRAC.
-            NSGraphicsContext.saveGraphicsState()
-            NSBezierPath(rect: bounds).addClip()
-            let cx = bounds.minX + bounds.width * GLOW_FRAC
-            let w: CGFloat = 26
-            let r = NSRect(x: cx - w / 2, y: bounds.minY, width: w, height: bounds.height)
-            if let grad = NSGradient(colors: [col.withAlphaComponent(0), col.withAlphaComponent(a), col.withAlphaComponent(0)]) {
-                grad.draw(in: NSBezierPath(rect: r), angle: 0)
-            }
-            NSGraphicsContext.restoreGraphicsState()
-            return
-        }
+        let a = GLOW_ALPHA * (active ? 1 : 0.30)
         // Horizontal glow: brightest at the right edge, fading left to nothing by GLOW_FRAC.
         let p = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 1), xRadius: 6, yRadius: 6)
         if let grad = NSGradient(colorsAndLocations:
@@ -229,21 +177,6 @@ final class DecoRowView: NSTableRowView {
             (col.withAlphaComponent(0),  GLOW_FRAC),
             (col.withAlphaComponent(a),  1.0)) {
             grad.draw(in: p, angle: 0)
-        }
-    }
-
-    private func drawWash(_ col: NSColor, _ active: Bool) {
-        guard THEME.wash != .none else { return }
-        let a = THEME.washAlpha * (active ? 1 : 0.3)
-        let p = NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 1), xRadius: 6, yRadius: 6)
-        switch THEME.wash {
-        case .flat:
-            col.withAlphaComponent(a).setFill(); p.fill()
-        case .fade:
-            if let grad = NSGradient(colors: [col.withAlphaComponent(a), col.withAlphaComponent(0)]) { grad.draw(in: p, angle: 0) }
-        case .sheen:
-            if let grad = NSGradient(colors: [col.withAlphaComponent(a), col.withAlphaComponent(a * 0.2)]) { grad.draw(in: p, angle: -90) }
-        case .none: break
         }
     }
 
@@ -259,9 +192,7 @@ final class DecoRowView: NSTableRowView {
             NSGraphicsContext.restoreGraphicsState()
         }
         let col = style(state).color
-        let active = isActive(state)
-        drawWash(col, active)
-        drawGlow(col, active)
+        drawGlow(col, isActive(state))
         // Crisp bar on top — no shape-tracing shadow.
         col.setFill()
         NSBezierPath(roundedRect: barRect(), xRadius: 1.5, yRadius: 1.5).fill()
@@ -330,19 +261,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let vf = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-
-        let rect: NSRect
-        if GALLERY > 0 {
-            let pw: CGFloat = 268, ph: CGFloat = 250
-            let cellW = pw + 10, cellH = ph + 36
-            let cols = max(1, Int((vf.width - 12) / cellW))
-            let c = SLOT % cols, r = SLOT / cols
-            rect = NSRect(x: vf.minX + 10 + CGFloat(c) * cellW,
-                          y: vf.maxY - 10 - CGFloat(r) * cellH - ph,
-                          width: pw, height: ph)
-        } else {
-            rect = NSRect(x: vf.maxX - THEME.w - 20, y: vf.maxY - THEME.h - 20, width: THEME.w, height: THEME.h)
-        }
+        let rect = NSRect(x: vf.maxX - WIN_W - 20, y: vf.maxY - WIN_H - 20, width: WIN_W, height: WIN_H)
 
         panel = NSPanel(contentRect: rect,
                         styleMask: [.titled, .closable, .resizable, .utilityWindow, .fullSizeContentView],
@@ -401,7 +320,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         table.headerView = nil
         table.backgroundColor = .clear
         table.gridStyleMask = []
-        table.rowHeight = THEME.rowHeight
+        table.rowHeight = ROW_HEIGHT
         table.intercellSpacing = NSSize(width: 0, height: 1)
         let colmn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("c"))
         colmn.resizingMask = .autoresizingMask
