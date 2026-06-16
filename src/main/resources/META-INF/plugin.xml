@@ -16,4 +16,14 @@
                     factoryClass="com.nije.claudesessions.SessionsToolWindowFactory"/>
         <postStartupActivity implementation="com.nije.claudesessions.FocusWatcher"/>
     </extensions>
+
+    <actions>
+        <action id="com.nije.claudesessions.NewClaudeSession"
+                class="com.nije.claudesessions.NewClaudeSessionAction"
+                text="New Claude Session"
+                description="Open a new terminal tab and run the 'clauded' alias">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt shift C"/>
+        </action>
+    </actions>
 </idea-plugin>

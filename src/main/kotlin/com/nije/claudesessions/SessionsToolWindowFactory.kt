@@ -12,8 +12,6 @@ import com.intellij.ui.content.Content
 import com.intellij.ui.content.ContentFactory
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
-import org.jetbrains.plugins.terminal.ShellTerminalWidget
-import org.jetbrains.plugins.terminal.TerminalToolWindowManager
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
@@ -51,7 +49,7 @@ class SessionsPanel(private val project: Project) : JPanel(BorderLayout()) {
         })
 
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT))
-        toolbar.add(JButton("New terminal").apply { addActionListener { newTerminal() } })
+        toolbar.add(JButton("New Claude session").apply { addActionListener { newTerminal() } })
         toolbar.add(JButton("Refresh").apply { addActionListener { refresh() } })
         add(toolbar, BorderLayout.NORTH)
         add(JBScrollPane(list), BorderLayout.CENTER)
@@ -71,11 +69,7 @@ class SessionsPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
     }
 
-    private fun newTerminal() {
-        val mgr = TerminalToolWindowManager.getInstance(project)
-        val dir = project.basePath ?: System.getProperty("user.home")
-        mgr.createShellWidget(dir, "claude", true, false)
-    }
+    private fun newTerminal() = ClaudeLauncher.spawn(project)
 
     private val debugLog = java.io.File(System.getProperty("user.home"), ".claude/session-status/plugin-debug.log")
 
