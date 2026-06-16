@@ -23,7 +23,8 @@
                 text="New Claude Session"
                 description="Open a new terminal tab and run the 'clauded' alias">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
-            <keyboard-shortcut keymap="$default" first-keystroke="control alt shift C"/>
+            <!-- No default shortcut: the new-chat hotkey is owned by the claude-sessions
+                 menu-bar app (Settings…), so it's not duplicated in the IDE keymap. -->
         </action>
     </actions>
 </idea-plugin>
