@@ -51,6 +51,7 @@ class SessionsPanel(private val project: Project) : JPanel(BorderLayout()) {
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT))
         toolbar.add(JButton("New Claude session").apply { addActionListener { newTerminal() } })
         toolbar.add(JButton("Refresh").apply { addActionListener { refresh() } })
+        toolbar.add(JButton("Rebind shortcut…").apply { addActionListener { rebindShortcut() } })
         add(toolbar, BorderLayout.NORTH)
         add(JBScrollPane(list), BorderLayout.CENTER)
 
@@ -70,6 +71,14 @@ class SessionsPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private fun newTerminal() = ClaudeLauncher.spawn(project)
+
+    /** Open the Keymap settings with the "New Claude Session" action pre-selected so the
+     *  user can (re)bind its shortcut. */
+    private fun rebindShortcut() {
+        com.intellij.openapi.keymap.impl.ui.EditKeymapsDialog(
+            project, "com.nije.claudesessions.NewClaudeSession", false
+        ).show()
+    }
 
     private val debugLog = java.io.File(System.getProperty("user.home"), ".claude/session-status/plugin-debug.log")
 

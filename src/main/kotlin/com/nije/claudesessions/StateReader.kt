@@ -42,6 +42,7 @@ object StateReader {
                     f.delete()
                     continue
                 }
+                if (str("tty").isEmpty()) continue   // hide IDE/ACP-spawned sessions (no terminal tab)
                 out.add(
                     Session(
                         sessionId = str("session_id"),

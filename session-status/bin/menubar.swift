@@ -44,12 +44,14 @@ func loadSessions() -> [Sess] {
               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
         let pid = (obj["pid"] as? Int) ?? (obj["ppid"] as? Int) ?? 0
         if pid > 0, !isAlive(pid) { continue }
+        let tty = (obj["tty"] as? String) ?? ""
+        if tty.isEmpty { continue }   // hide IDE/ACP-spawned sessions (no terminal tab)
         out.append(Sess(
             topic: (obj["topic"] as? String) ?? "?",
             state: (obj["state"] as? String) ?? "?",
             updated: (obj["updated_at"] as? Double) ?? 0,
             message: (obj["message"] as? String) ?? "",
-            tty: (obj["tty"] as? String) ?? ""
+            tty: tty
         ))
     }
     return out

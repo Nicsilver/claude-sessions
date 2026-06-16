@@ -3,7 +3,9 @@ package com.nije.claudesessions
 import com.google.gson.JsonParser
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.startup.ProjectActivity
+import com.intellij.openapi.wm.WindowManager
 import kotlinx.coroutines.delay
 import java.io.File
 
@@ -23,10 +25,24 @@ class FocusWatcher : ProjectActivity {
             if (req.ts <= lastTs) continue
             lastTs = req.ts
             ApplicationManager.getApplication().invokeLater {
-                if (req.action == "close") TerminalJump.closeTty(project, req.tty)
-                else TerminalJump.jumpToTty(project, req.tty, bringToFront = true)
+                when (req.action) {
+                    "close" -> TerminalJump.closeTty(project, req.tty)
+                    "new"   -> if (isMostRecentProject(project)) ClaudeLauncher.spawn(project)
+                    else    -> TerminalJump.jumpToTty(project, req.tty, bringToFront = true)
+                }
             }
         }
+    }
+
+    /** A "new session" request carries no tty, so every open project sees it. Elect a
+     *  single one — the most-recently-focused project's frame (or, failing that, the
+     *  first open project) — so exactly one spawns. */
+    private fun isMostRecentProject(project: Project): Boolean {
+        val wm = WindowManager.getInstance()
+        val recent = wm.mostRecentFocusedWindow
+        val open = ProjectManager.getInstance().openProjects
+        val target = open.firstOrNull { wm.getFrame(it) === recent } ?: open.firstOrNull()
+        return project === target
     }
 
     private fun read(f: File): Req? = try {
@@ -35,7 +51,8 @@ class FocusWatcher : ProjectActivity {
             val tty = if (o.has("tty") && !o.get("tty").isJsonNull) o.get("tty").asString else ""
             val ts = if (o.has("ts") && !o.get("ts").isJsonNull) o.get("ts").asDouble else 0.0
             val action = if (o.has("action") && !o.get("action").isJsonNull) o.get("action").asString else "focus"
-            if (tty.isEmpty()) null else Req(tty, ts, action)
+            // "new" carries no tty; every other action needs one.
+            if (tty.isEmpty() && action != "new") null else Req(tty, ts, action)
         }
     } catch (e: Throwable) {
         null

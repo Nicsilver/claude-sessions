@@ -15,15 +15,15 @@ import Darwin
 let STATE_DIR = NSString(string: "~/.claude/session-status/state").expandingTildeInPath
 let REQUEST_PATH = (STATE_DIR as NSString).deletingLastPathComponent + "/focus-request.json"
 
-/// Ask the IntelliJ plugin to act on the tab for this tty (it watches this file):
-/// action "focus" jumps to the tab, "close" closes it (ending the session).
+/// Ask the IntelliJ plugin to act via the watched request file:
+/// "focus" jumps to the tab, "close" closes it, "new" spawns a fresh `clauded` session
+/// (no tty — the plugin picks the most-recently-focused project).
 func writeRequest(_ tty: String, action: String) {
-    if tty.isEmpty { return }
     let ts = Date().timeIntervalSince1970
     let json = "{\"tty\":\"\(tty)\",\"ts\":\(ts),\"action\":\"\(action)\"}"
     try? json.write(toFile: REQUEST_PATH, atomically: true, encoding: .utf8)
 }
-func writeFocusRequest(_ tty: String) { writeRequest(tty, action: "focus") }
+func writeFocusRequest(_ tty: String) { if !tty.isEmpty { writeRequest(tty, action: "focus") } }
 
 func isAlive(_ pid: Int) -> Bool {
     if pid <= 0 { return true }
@@ -42,12 +42,14 @@ func loadSessions() -> [Sess] {
               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
         let pid = (obj["pid"] as? Int) ?? (obj["ppid"] as? Int) ?? 0
         if pid > 0, !isAlive(pid) { continue }
+        let tty = (obj["tty"] as? String) ?? ""
+        if tty.isEmpty { continue }   // hide IDE/ACP-spawned sessions (no terminal tab)
         out.append(Sess(
             topic: (obj["topic"] as? String) ?? "?",
             state: (obj["state"] as? String) ?? "?",
             updated: (obj["updated_at"] as? Double) ?? 0,
             message: (obj["message"] as? String) ?? "",
-            tty: (obj["tty"] as? String) ?? ""))
+            tty: tty))
     }
     return out
 }
@@ -335,6 +337,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         content.addSubview(cs)
         countStack = cs
 
+        // Small "+" in the footer's bottom-left — spawns a new `clauded` session.
+        let newBtn = NSButton()
+        let plusCfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+        newBtn.image = NSImage(systemSymbolName: "plus.circle.fill", accessibilityDescription: "New Claude session")?.withSymbolConfiguration(plusCfg)
+        newBtn.imagePosition = .imageOnly
+        newBtn.isBordered = false
+        newBtn.bezelStyle = .inline
+        newBtn.contentTintColor = .secondaryLabelColor
+        newBtn.toolTip = "New Claude session (clauded)"
+        newBtn.target = self
+        newBtn.action = #selector(newSession)
+        newBtn.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(newBtn)
+
         let sep = NSBox(); sep.boxType = .separator
         sep.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(sep)
@@ -382,6 +398,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         NSLayoutConstraint.activate([
             cs.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -9),
             cs.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            newBtn.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+            newBtn.centerYAnchor.constraint(equalTo: cs.centerYAnchor),
             sep.bottomAnchor.constraint(equalTo: cs.topAnchor, constant: -8),
             sep.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
             sep.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
@@ -406,6 +424,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         let r = table.clickedRow
         if r >= 0 && r < sessions.count { writeFocusRequest(sessions[r].tty) }
     }
+
+    @objc func newSession() { writeRequest("", action: "new") }
 
     private func chip(_ stateKey: String, _ count: Int) -> NSView {
         let st = style(stateKey)
