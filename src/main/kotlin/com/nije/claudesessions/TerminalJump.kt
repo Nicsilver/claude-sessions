@@ -48,6 +48,22 @@ object TerminalJump {
         }, true, true)
     }
 
+    /** Close the terminal tab whose shell runs on a given tty — terminates the shell
+     *  (and the Claude process inside it) and removes the tab. Only the project that
+     *  actually holds the matching tty acts; others no-op. */
+    fun closeTty(project: Project, tty: String) {
+        if (tty.isEmpty()) return
+        val mgr = TerminalToolWindowManager.getInstance(project)
+        val widgets = runCatching { mgr.terminalWidgets }.getOrNull() ?: emptySet()
+        val w = widgets.firstOrNull { val t = widgetTty(it); t.isNotEmpty() && norm(t) == norm(tty) }
+        if (w == null) { dbg("closeTty tty='$tty' widgets=${widgets.size} -> <none>"); return }
+        val content = runCatching { mgr.getContainer(w)?.content }.getOrNull()
+        if (content == null) { dbg("closeTty tty='$tty' -> no content"); return }
+        val tw = ToolWindowManager.getInstance(project).getToolWindow("Terminal") ?: return
+        dbg("closeTty tty='$tty' content='${content.displayName}' -> removing")
+        tw.contentManager.removeContent(content, true)
+    }
+
     // TerminalWidget extends ComponentContainer, so get its component/focusable directly.
     private fun componentOf(w: Any): java.awt.Component? =
         (w as? com.intellij.openapi.ui.ComponentContainer)?.component ?: (w as? java.awt.Component)

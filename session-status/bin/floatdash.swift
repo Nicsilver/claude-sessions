@@ -15,13 +15,15 @@ import Darwin
 let STATE_DIR = NSString(string: "~/.claude/session-status/state").expandingTildeInPath
 let REQUEST_PATH = (STATE_DIR as NSString).deletingLastPathComponent + "/focus-request.json"
 
-/// Ask the IntelliJ plugin to jump to the tab on this tty (it watches this file).
-func writeFocusRequest(_ tty: String) {
+/// Ask the IntelliJ plugin to act on the tab for this tty (it watches this file):
+/// action "focus" jumps to the tab, "close" closes it (ending the session).
+func writeRequest(_ tty: String, action: String) {
     if tty.isEmpty { return }
     let ts = Date().timeIntervalSince1970
-    let json = "{\"tty\":\"\(tty)\",\"ts\":\(ts)}"
+    let json = "{\"tty\":\"\(tty)\",\"ts\":\(ts),\"action\":\"\(action)\"}"
     try? json.write(toFile: REQUEST_PATH, atomically: true, encoding: .utf8)
 }
+func writeFocusRequest(_ tty: String) { writeRequest(tty, action: "focus") }
 
 func isAlive(_ pid: Int) -> Bool {
     if pid <= 0 { return true }
@@ -264,6 +266,16 @@ final class DecoRowView: NSTableRowView {
     }
 }
 
+/// Table that turns a right-click on a row into an immediate action (no context menu).
+final class ClickTable: NSTableView {
+    var onRightClick: ((Int) -> Void)?
+    override func rightMouseDown(with event: NSEvent) {
+        let r = row(at: convert(event.locationInWindow, from: nil))
+        if r >= 0 { onRightClick?(r) } else { super.rightMouseDown(with: event) }
+    }
+    override func menu(for event: NSEvent) -> NSMenu? { nil }   // never show a context menu
+}
+
 // MARK: - App
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate {
@@ -336,7 +348,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         scroll.automaticallyAdjustsContentInsets = false
         scroll.contentInsets = NSEdgeInsets(top: 3, left: 0, bottom: 4, right: 0)
 
-        table = NSTableView()
+        let tbl = ClickTable()
+        tbl.onRightClick = { [weak self] r in
+            guard let self, r < self.sessions.count else { return }
+            writeRequest(self.sessions[r].tty, action: "close")   // right-click closes the tab
+        }
+        table = tbl
         table.style = .plain                  // same origin for bar (row) and text (cell)
         table.selectionHighlightStyle = .none  // no blue selection — click just jumps
         table.headerView = nil
