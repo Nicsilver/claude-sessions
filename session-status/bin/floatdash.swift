@@ -182,6 +182,18 @@ final class SessionRow: NSTableCellView {
 
 final class DecoRowView: NSTableRowView {
     var state: String = "" { didSet { if state != oldValue { needsDisplay = true } } }
+    private var hovered = false { didSet { if hovered != oldValue { needsDisplay = true } } }
+
+    // Per-row hover tracking so you can see which row you're about to click.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true; NSCursor.pointingHand.set() }
+    override func mouseExited(with event: NSEvent)  { hovered = false; NSCursor.arrow.set() }
 
     private func barRect() -> NSRect {
         let bh = max(10, bounds.height - 7)
@@ -231,6 +243,10 @@ final class DecoRowView: NSTableRowView {
 
     override func drawBackground(in dirtyRect: NSRect) {
         super.drawBackground(in: dirtyRect)
+        if hovered {
+            NSColor.white.withAlphaComponent(0.07).setFill()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 1), xRadius: 6, yRadius: 6).fill()
+        }
         let col = style(state).color
         let active = isActive(state)
         drawWash(col, active)
