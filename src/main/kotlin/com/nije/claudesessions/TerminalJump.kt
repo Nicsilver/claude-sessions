@@ -59,9 +59,11 @@ object TerminalJump {
         if (w == null) { dbg("closeTty tty='$tty' widgets=${widgets.size} -> <none>"); return }
         val content = runCatching { mgr.getContainer(w)?.content }.getOrNull()
         if (content == null) { dbg("closeTty tty='$tty' -> no content"); return }
-        val tw = ToolWindowManager.getInstance(project).getToolWindow("Terminal") ?: return
-        dbg("closeTty tty='$tty' content='${content.displayName}' -> removing")
-        tw.contentManager.removeContent(content, true)
+        dbg("closeTty tty='$tty' content='${content.displayName}' -> closeTab")
+        // closeTab() is the terminal's own tab-close (same as the × button): terminates
+        // the session and removes the tab. removeContent() on the tool window's content
+        // manager silently no-ops here.
+        runCatching { mgr.closeTab(content) }.onFailure { dbg("  closeTab failed: ${it.message}") }
     }
 
     // TerminalWidget extends ComponentContainer, so get its component/focusable directly.
