@@ -268,12 +268,21 @@ final class DecoRowView: NSTableRowView {
     }
 }
 
-/// Table that turns a right-click on a row into an immediate action (no context menu).
+/// Table that turns a right-click on a row into an immediate action (no context menu), and
+/// lets a click on empty list space drag the window (like the header/footer background).
 final class ClickTable: NSTableView {
     var onRightClick: ((Int) -> Void)?
     override func rightMouseDown(with event: NSEvent) {
         let r = row(at: convert(event.locationInWindow, from: nil))
         if r >= 0 { onRightClick?(r) } else { super.rightMouseDown(with: event) }
+    }
+    override func mouseDown(with event: NSEvent) {
+        // On a row → normal click (jump); on empty space → drag the whole window.
+        if row(at: convert(event.locationInWindow, from: nil)) >= 0 {
+            super.mouseDown(with: event)
+        } else {
+            window?.performDrag(with: event)
+        }
     }
     override func menu(for event: NSEvent) -> NSMenu? { nil }   // never show a context menu
 }
