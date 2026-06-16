@@ -278,6 +278,37 @@ final class ClickTable: NSTableView {
     override func menu(for event: NSEvent) -> NSMenu? { nil }   // never show a context menu
 }
 
+/// A clickable "+" disc that mirrors a traffic-light button: a filled circle with a plus
+/// cut into it, drawn to fill its bounds exactly (so its size matches the window buttons —
+/// SF Symbols render their circle smaller than the point size, which won't match).
+/// Brightens + shows a pointing hand on hover.
+final class IconButton: NSView {
+    var onClick: (() -> Void)?
+    private var hovered = false { didSet { needsDisplay = true } }
+    override init(frame f: NSRect) { super.init(frame: f) }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func mouseUp(with e: NSEvent) {
+        if bounds.contains(convert(e.locationInWindow, from: nil)) { onClick?() }
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+    override func mouseEntered(with e: NSEvent) { hovered = true; NSCursor.pointingHand.set() }
+    override func mouseExited(with e: NSEvent)  { hovered = false; NSCursor.arrow.set() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        (hovered ? NSColor.labelColor : NSColor.secondaryLabelColor).setFill()
+        NSBezierPath(ovalIn: bounds).fill()
+        g(0.10).setFill()                       // the dark titlebar/content bg — reads as a cutout
+        let d = bounds.width, arm = d * 0.46, t = max(1.6, d * 0.14)
+        NSBezierPath(rect: NSRect(x: bounds.midX - arm / 2, y: bounds.midY - t / 2, width: arm, height: t)).fill()
+        NSBezierPath(rect: NSRect(x: bounds.midX - t / 2, y: bounds.midY - arm / 2, width: t, height: arm)).fill()
+    }
+}
+
 // MARK: - App
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate {
@@ -337,20 +368,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         content.addSubview(cs)
         countStack = cs
 
-        // Small "+" in the footer's bottom-left — spawns a new `clauded` session.
-        let newBtn = NSButton()
-        let plusCfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
-        newBtn.image = NSImage(systemSymbolName: "plus.circle.fill", accessibilityDescription: "New Claude session")?.withSymbolConfiguration(plusCfg)
-        newBtn.imagePosition = .imageOnly
-        newBtn.isBordered = false
-        newBtn.bezelStyle = .inline
-        newBtn.contentTintColor = .secondaryLabelColor
-        newBtn.toolTip = "New Claude session (clauded)"
-        newBtn.target = self
-        newBtn.action = #selector(newSession)
-        newBtn.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(newBtn)
-
         let sep = NSBox(); sep.boxType = .separator
         sep.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(sep)
@@ -398,8 +415,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         NSLayoutConstraint.activate([
             cs.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -9),
             cs.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-            newBtn.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-            newBtn.centerYAnchor.constraint(equalTo: cs.centerYAnchor),
             sep.bottomAnchor.constraint(equalTo: cs.topAnchor, constant: -8),
             sep.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
             sep.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
@@ -414,8 +429,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         ])
 
         panel.makeKeyAndOrderFront(nil)
+        installPlusButton()   // now the traffic-light frames are final, so we can mirror them
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in self?.refresh() }
+    }
+
+    /// "+" in the top-right, an exact mirror of the close button: same size, same gap from
+    /// the top, and the same gap from the right edge as the close button has from the left.
+    private func installPlusButton() {
+        guard let closeBtn = panel.standardWindowButton(.closeButton), let bar = closeBtn.superview else { return }
+        let side = closeBtn.frame.width    // match the traffic-light diameter exactly
+        let leftInset = closeBtn.frame.minX // mirror this gap on the right
+
+        let plus = IconButton()
+        plus.toolTip = "New Claude session (clauded)"
+        plus.onClick = { [weak self] in self?.newSession() }
+        plus.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(plus)
+        NSLayoutConstraint.activate([
+            plus.centerYAnchor.constraint(equalTo: closeBtn.centerYAnchor),
+            plus.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -leftInset),
+            plus.widthAnchor.constraint(equalToConstant: side),
+            plus.heightAnchor.constraint(equalToConstant: side),
+        ])
     }
 
     func windowWillClose(_ notification: Notification) { NSApp.terminate(nil) }
