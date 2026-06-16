@@ -1,0 +1,44 @@
+#!/bin/zsh
+# Control script for the Claude session-status surfaces.
+#   status dash      -> run the dashboard window (Surface A) in this terminal
+#   status menubar   -> start the menu-bar badge (Surface B) in the background
+#   status menubar-stop
+#   status uninstall -> remove hooks from settings.json + delete state (back to stock)
+#
+# Code lives wherever this script lives (the repo); runtime state lives in DATA.
+PY=/opt/homebrew/bin/python3
+DIR="${0:A:h}"                       # this script's own directory (self-locating)
+BIN="$DIR/bin"
+DATA="$HOME/.claude/session-status"  # shared runtime data (state/, focus-request.json)
+
+case "$1" in
+  dash|dashboard)
+    exec "$PY" "$BIN/dashboard.py" ;;
+  float|panel)
+    if pgrep -f "$BIN/floatdash" >/dev/null; then echo "floating panel already running"; exit 0; fi
+    "$BIN/floatdash" >/dev/null 2>&1 &
+    echo "floating panel started (top-right, always on top). Stop with: status float-stop" ;;
+  float-stop)
+    pkill -f "$BIN/floatdash" && echo "floating panel stopped" || echo "not running" ;;
+  menubar)
+    if pgrep -f "$BIN/menubar" >/dev/null; then echo "menu bar already running"; exit 0; fi
+    "$BIN/menubar" >/dev/null 2>&1 &
+    echo "menu-bar badge started (look top-right). Stop with: status menubar-stop" ;;
+  menubar-stop)
+    pkill -f "$BIN/menubar" && echo "menu bar stopped" || echo "not running" ;;
+  uninstall)
+    "$PY" - "$HOME/.claude/settings.json" <<'PYEOF'
+import json,sys
+p=sys.argv[1]
+d=json.load(open(p))
+d.pop("hooks",None)
+json.dump(d,open(p,"w"),indent=2)
+print("removed hooks block from settings.json")
+PYEOF
+    pkill -f "$BIN/menubar" 2>/dev/null
+    pkill -f "$BIN/floatdash" 2>/dev/null
+    rm -rf "$DATA/state"
+    echo "state cleared. Restart your Claude sessions to fully detach. (code in $DIR kept)" ;;
+  *)
+    echo "usage: status {dash|float|float-stop|menubar|menubar-stop|uninstall}" ;;
+esac

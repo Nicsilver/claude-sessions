@@ -1,0 +1,7 @@
+# Compiled Swift surfaces (build from the .swift sources with swiftc)
+bin/floatdash
+bin/menubar
+
+# Python bytecode
+__pycache__/
+*.pyc
