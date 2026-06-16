@@ -231,7 +231,6 @@ final class DecoRowView: NSTableRowView {
 
     override func drawBackground(in dirtyRect: NSRect) {
         super.drawBackground(in: dirtyRect)
-        guard !isSelected else { return }
         let col = style(state).color
         let active = isActive(state)
         drawWash(col, active)
@@ -308,13 +307,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         let scroll = NSScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.hasVerticalScroller = true
+        scroll.scrollerStyle = .overlay        // hidden; fades in only while scrolling
+        scroll.autohidesScrollers = true       // and only when there's actually overflow
         scroll.drawsBackground = false
         scroll.automaticallyAdjustsContentInsets = false
         scroll.contentInsets = NSEdgeInsets(top: 3, left: 0, bottom: 4, right: 0)
 
         table = NSTableView()
         table.style = .plain                  // same origin for bar (row) and text (cell)
-        table.selectionHighlightStyle = .regular
+        table.selectionHighlightStyle = .none  // no blue selection — click just jumps
         table.headerView = nil
         table.backgroundColor = .clear
         table.gridStyleMask = []
