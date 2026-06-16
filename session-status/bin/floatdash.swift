@@ -348,7 +348,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
                         styleMask: [.titled, .closable, .resizable, .utilityWindow, .fullSizeContentView],
                         backing: .buffered, defer: false)
         panel.appearance = NSAppearance(named: .darkAqua)
-        panel.title = "\(VARIANT). \(THEME.name)"
+        panel.title = "Claude sessions"
         panel.titlebarAppearsTransparent = true
         panel.titleVisibility = .visible
         panel.isFloatingPanel = true
