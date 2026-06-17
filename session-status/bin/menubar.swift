@@ -550,6 +550,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     var timer: Timer?
     var prevStates: [String: String] = [:]   // session id → last seen state (for flip-to-needs)
     var seeded = false
+    var clickMonitor: Any?
     var jumpRef: EventHotKeyRef?
     var newRef: EventHotKeyRef?
     var settingsWindow: NSWindow?
@@ -607,8 +608,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusClicked)
-        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp, .otherMouseUp])
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem.button?.imagePosition = .imageLeading
+
+        // Middle-click isn't routed to the status-item action by AppKit, so catch it with a
+        // local monitor and act only when it lands on our status-item window.
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .otherMouseDown) { [weak self] e in
+            guard let self, e.buttonNumber == 2,
+                  let w = self.statusItem.button?.window, e.window === w else { return e }
+            self.openFloatdash()
+            return nil
+        }
 
         list = PopoverList()
         list.onActivate = { [weak self] in self?.popover.performClose(nil) }
@@ -691,11 +701,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// Left-click jumps to the top session; right-/ctrl-click opens the list; middle-click
-    /// summons the always-on-top floating widget.
+    /// Left-click jumps to the top session; right-/ctrl-click opens the list. (Middle-click
+    /// is handled by the local event monitor → summons the floating widget.)
     @objc func statusClicked() {
         let e = NSApp.currentEvent
-        if e?.type == .otherMouseUp { openFloatdash(); return }
         let rightish = e?.type == .rightMouseUp || (e?.modifierFlags.contains(.control) ?? false)
         if rightish { togglePopover() } else { jumpToTop() }
     }
