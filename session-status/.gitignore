@@ -3,6 +3,9 @@ bin/floatdash
 bin/menubar
 # Menu-bar app bundle (generated from menubar.swift + menubar-Info.plist)
 bin/ClaudeSessions.app/
+# icon build intermediates (AppIcon.icns is committed; these are regenerated)
+bin/AppIcon.png
+bin/icon.iconset/
 
 # Python bytecode
 __pycache__/

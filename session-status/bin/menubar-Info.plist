@@ -10,6 +10,8 @@
     <string>com.nije.claude-sessions.menubar</string>
     <key>CFBundleExecutable</key>
     <string>ClaudeSessions</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleInfoDictionaryVersion</key>

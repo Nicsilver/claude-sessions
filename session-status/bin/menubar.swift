@@ -13,6 +13,7 @@ import Cocoa
 import Darwin
 import Carbon.HIToolbox       // global hotkey (RegisterEventHotKey)
 import UserNotifications      // clickable notifications (needs the .app bundle)
+import ServiceManagement      // login item (SMAppService)
 
 let STATE_DIR = NSString(string: "~/.claude/session-status/state").expandingTildeInPath
 let REQUEST_PATH = (STATE_DIR as NSString).deletingLastPathComponent + "/focus-request.json"
@@ -769,6 +770,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         prevStates = Dictionary(s.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })  // track all so unmute alone doesn't re-fire
         seeded = true
     }
+}
+
+// One-shot login-item management (used by `status autostart` / `autostart-off`): register
+// or unregister this .app as a proper macOS login item, then exit without starting the UI.
+if CommandLine.arguments.contains("register") {
+    if #available(macOS 13.0, *) { try? SMAppService.mainApp.register() }
+    exit(0)
+}
+if CommandLine.arguments.contains("unregister") {
+    if #available(macOS 13.0, *) { try? SMAppService.mainApp.unregister() }
+    exit(0)
 }
 
 let app = NSApplication.shared

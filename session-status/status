@@ -32,27 +32,15 @@ case "$1" in
   menubar-stop)
     pkill -f "ClaudeSessions.app" && echo "menu bar stopped" || echo "not running" ;;
   autostart)
-    mkdir -p "$HOME/Library/LaunchAgents"
-    cat > "$AGENT" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key><string>com.nije.claude-sessions.menubar</string>
-    <key>ProgramArguments</key><array><string>$MENUBAR</string></array>
-    <key>RunAtLoad</key><true/>
-</dict>
-</plist>
-PLIST
-    launchctl unload "$AGENT" 2>/dev/null
-    pkill -f "ClaudeSessions.app" 2>/dev/null   # avoid a duplicate; launchd starts the managed one
-    sleep 0.3
-    launchctl load -w "$AGENT"
-    echo "menu-bar app set to start at login (and started now). Disable with: status autostart-off" ;;
+    # migrate off the old LaunchAgent if it's still around
+    if [ -f "$AGENT" ]; then launchctl unload "$AGENT" 2>/dev/null; rm -f "$AGENT"; fi
+    "$MENUBAR" register                                   # proper login item via SMAppService
+    if ! pgrep -f "ClaudeSessions.app" >/dev/null; then "$MENUBAR" >/dev/null 2>&1 & fi
+    echo "registered as a login item (starts at login, shows in System Settings > Login Items). Disable: status autostart-off" ;;
   autostart-off)
-    launchctl unload -w "$AGENT" 2>/dev/null
-    rm -f "$AGENT"
-    echo "login autostart removed (the app keeps running until you quit it)" ;;
+    "$MENUBAR" unregister
+    if [ -f "$AGENT" ]; then launchctl unload "$AGENT" 2>/dev/null; rm -f "$AGENT"; fi
+    echo "login item removed (the app keeps running until you quit it)" ;;
   uninstall)
     "$PY" - "$HOME/.claude/settings.json" <<'PYEOF'
 import json,sys
