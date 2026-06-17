@@ -10,6 +10,7 @@ PY=/opt/homebrew/bin/python3
 DIR="${0:A:h}"                       # this script's own directory (self-locating)
 BIN="$DIR/bin"
 DATA="$HOME/.claude/session-status"  # shared runtime data (state/, focus-request.json)
+MENUBAR="$BIN/ClaudeSessions.app/Contents/MacOS/ClaudeSessions"  # bundled (clickable notifications)
 
 case "$1" in
   dash|dashboard)
@@ -21,11 +22,11 @@ case "$1" in
   float-stop)
     pkill -f "$BIN/floatdash" && echo "floating panel stopped" || echo "not running" ;;
   menubar)
-    if pgrep -f "$BIN/menubar" >/dev/null; then echo "menu bar already running"; exit 0; fi
-    "$BIN/menubar" >/dev/null 2>&1 &
+    if pgrep -f "ClaudeSessions.app" >/dev/null; then echo "menu bar already running"; exit 0; fi
+    "$MENUBAR" >/dev/null 2>&1 &
     echo "menu-bar badge started (look top-right). Stop with: status menubar-stop" ;;
   menubar-stop)
-    pkill -f "$BIN/menubar" && echo "menu bar stopped" || echo "not running" ;;
+    pkill -f "ClaudeSessions.app" && echo "menu bar stopped" || echo "not running" ;;
   uninstall)
     "$PY" - "$HOME/.claude/settings.json" <<'PYEOF'
 import json,sys
@@ -35,7 +36,7 @@ d.pop("hooks",None)
 json.dump(d,open(p,"w"),indent=2)
 print("removed hooks block from settings.json")
 PYEOF
-    pkill -f "$BIN/menubar" 2>/dev/null
+    pkill -f "ClaudeSessions.app" 2>/dev/null
     pkill -f "$BIN/floatdash" 2>/dev/null
     rm -rf "$DATA/state"
     echo "state cleared. Restart your Claude sessions to fully detach. (code in $DIR kept)" ;;

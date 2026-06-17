@@ -7,15 +7,17 @@ waiting on you — the data source behind the companion IntelliJ plugin in this 
 
 Claude Code hooks invoke `bin/record.py` on session lifecycle events
 (`start` / `working` / `needs` / `done` / `end`). It writes a tiny per-session
-state file to `~/.claude/session-status/state/<session_id>.json` and fires a
-macOS notification when a session flips into "needs you".
+state file to `~/.claude/session-status/state/<session_id>.json`.
 
 Two surfaces read that state:
 
-- **`bin/menubar.swift`** — a menu-bar badge (`🔴N` / `🟡N` / `🟢N` / `✅`) with a
-  dropdown of every session.
-- **`bin/floatdash.swift`** — an always-on-top floating dashboard. Click a row to
-  jump to that session's terminal tab/pane (writes
+- **`bin/menubar.swift`** — a menu-bar badge (state-colored pill + count). Left-click
+  jumps to the top session, right-click opens a dark popover list, and it posts a
+  **clickable notification** when a session flips to "needs you" (click → jump). Built as
+  `ClaudeSessions.app` (a real bundle is required for `UNUserNotificationCenter`). Two
+  global hotkeys (jump-to-top, new-chat) are rebindable from its Settings window.
+- **`bin/floatdash.swift`** — an always-on-top floating dashboard. Left-click a row to
+  jump to that session's terminal tab/pane, right-click to close it (writes
   `~/.claude/session-status/focus-request.json`, which the IntelliJ plugin watches).
 
 Code lives here in the repo; **runtime data** (`state/`, `focus-request.json`)
@@ -26,12 +28,20 @@ lives in `~/.claude/session-status/`, shared with the IntelliJ plugin.
 ```sh
 cd bin
 swiftc -O floatdash.swift -o floatdash
-swiftc -O menubar.swift   -o menubar
+
+# menu-bar app must be a signed .app bundle for clickable notifications:
+APP=ClaudeSessions.app
+rm -rf "$APP" && mkdir -p "$APP/Contents/MacOS"
+cp menubar-Info.plist "$APP/Contents/Info.plist"
+swiftc -O menubar.swift -o "$APP/Contents/MacOS/ClaudeSessions"
+codesign -s - --force "$APP"      # ad-hoc sign
 
 ./status float      # floating dashboard (top-right, always on top)
-./status menubar    # menu-bar badge
+./status menubar    # menu-bar app (launches ClaudeSessions.app)
 ./status uninstall  # remove hooks from settings.json + clear state
 ```
+
+The first launch prompts once for notification permission.
 
 ## Wiring the hooks
 

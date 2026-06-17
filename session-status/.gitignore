@@ -1,6 +1,8 @@
 # Compiled Swift surfaces (build from the .swift sources with swiftc)
 bin/floatdash
 bin/menubar
+# Menu-bar app bundle (generated from menubar.swift + menubar-Info.plist)
+bin/ClaudeSessions.app/
 
 # Python bytecode
 __pycache__/

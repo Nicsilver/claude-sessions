@@ -11,7 +11,8 @@
 // Reads ~/.claude/session-status/state.
 import Cocoa
 import Darwin
-import Carbon.HIToolbox   // global hotkey (RegisterEventHotKey)
+import Carbon.HIToolbox       // global hotkey (RegisterEventHotKey)
+import UserNotifications      // clickable notifications (needs the .app bundle)
 
 let STATE_DIR = NSString(string: "~/.claude/session-status/state").expandingTildeInPath
 let REQUEST_PATH = (STATE_DIR as NSString).deletingLastPathComponent + "/focus-request.json"
@@ -30,7 +31,7 @@ func isAlive(_ pid: Int) -> Bool {
     return kill(pid_t(pid), 0) == 0 || errno == EPERM
 }
 
-struct Sess { var topic: String; var state: String; var updated: Double; var message: String; var tty: String }
+struct Sess { var id: String; var topic: String; var state: String; var updated: Double; var message: String; var tty: String }
 
 func loadSessions() -> [Sess] {
     let fm = FileManager.default
@@ -45,6 +46,7 @@ func loadSessions() -> [Sess] {
         let tty = (obj["tty"] as? String) ?? ""
         if tty.isEmpty { continue }   // hide IDE/ACP-spawned sessions (no terminal tab)
         out.append(Sess(
+            id: (obj["session_id"] as? String) ?? "",
             topic: (obj["topic"] as? String) ?? "?",
             state: (obj["state"] as? String) ?? "?",
             updated: (obj["updated_at"] as? Double) ?? 0,
@@ -488,11 +490,13 @@ final class ShortcutField: NSView {
 
 // MARK: - Status item + popover
 
-class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNotificationCenterDelegate {
     var statusItem: NSStatusItem!
     let popover = NSPopover()
     var list: PopoverList!
     var timer: Timer?
+    var prevStates: [String: String] = [:]   // session id → last seen state (for flip-to-needs)
+    var seeded = false
     var jumpRef: EventHotKeyRef?
     var newRef: EventHotKeyRef?
     var settingsWindow: NSWindow?
@@ -566,8 +570,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         installHotKeyHandler()
         registerHotKeys()
 
-        refreshBadge()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in self?.refreshBadge() }
+        let nc = UNUserNotificationCenter.current()
+        nc.delegate = self
+        nc.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+
+        tick()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in self?.tick() }
+    }
+
+    // MARK: notifications
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])   // show even though we're an accessory app
+    }
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        if let tty = response.notification.request.content.userInfo["tty"] as? String { writeFocusRequest(tty) }
+        completionHandler()
+    }
+
+    private func notifyNeeds(_ s: Sess) {
+        let content = UNMutableNotificationContent()
+        content.title = s.topic.isEmpty ? "Claude" : "Claude · \(s.topic)"
+        content.body = s.message.isEmpty ? "Claude needs your permission" : s.message
+        content.sound = .default
+        content.userInfo = ["tty": s.tty]
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 
     private func settingsLabel(_ s: String) -> NSTextField {
@@ -632,8 +662,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func popoverDidClose(_ notification: Notification) { list.stopTimer() }
 
-    func refreshBadge() {
+    /// Runs on the timer: refresh the badge and fire a notification for each session that
+    /// has just flipped INTO "needs" (seeded on first run so we don't notify on launch).
+    func tick() {
         let s = loadSessions()
+
         let needs = s.filter { $0.state == "needs" }.count
         let yt = s.filter { $0.state == "yourturn" }.count
         let working = s.filter { $0.state == "working" }.count
@@ -643,6 +676,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             else if working > 0 { button.image = pillImage(.systemGreen); button.title = " \(working)" }
             else { button.image = nil; button.title = "✅" }
         }
+
+        if seeded {
+            for x in s where x.state == "needs" && prevStates[x.id] != "needs" { notifyNeeds(x) }
+        }
+        prevStates = Dictionary(s.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
+        seeded = true
     }
 }
 

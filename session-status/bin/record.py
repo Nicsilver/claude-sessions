@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Claude Code session-status recorder (spike).
+"""Claude Code session-status recorder.
 
-Invoked by Claude Code hooks. Reads the hook JSON on stdin, writes a tiny
-per-session state file to ~/.claude/session-status/state/<session_id>.json,
-and fires a native macOS notification when a session flips INTO "needs me".
+Invoked by Claude Code hooks. Reads the hook JSON on stdin and writes a tiny
+per-session state file to ~/.claude/session-status/state/<session_id>.json.
+Notifications are posted by the menu-bar app (Claude Sessions.app), which watches
+that state and fires a clickable alert when a session flips INTO "needs me".
 
 Usage (from a hook):  record.py <state>
   state in: start | working | needs | done | end
@@ -98,9 +99,8 @@ def main():
 
     write_atomic(path, rec)
 
-    # Low-noise: only the urgent red state pings. "your turn" never does.
-    if eff == "needs" and prev.get("state") != "needs":
-        notify(topic, msg or "Claude needs your attention")
+    # Notifications are posted by the menu-bar app (Claude Sessions.app) so they're
+    # clickable (click → jump to the session). record.py just writes state.
     return 0
 
 
@@ -318,21 +318,6 @@ def write_atomic(path, rec):
             os.remove(tmp)
         except OSError:
             pass
-
-
-def notify(topic, message):
-    title = "Claude · {}".format(topic) if topic else "Claude"
-    title = sanitize(title)
-    m = sanitize(message)
-    if len(m) > 180:
-        m = m[:177] + "..."
-    try:
-        subprocess.run(
-            ["osascript", "-e",
-             'display notification "{}" with title "{}" sound name "Glass"'.format(m, title)],
-            timeout=3)
-    except Exception:
-        pass
 
 
 if __name__ == "__main__":
