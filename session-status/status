@@ -1,9 +1,12 @@
 #!/bin/zsh
 # Control script for the Claude session-status surfaces.
-#   status dash      -> run the dashboard window (Surface A) in this terminal
-#   status menubar   -> start the menu-bar badge (Surface B) in the background
+#   status dash          -> run the dashboard window (Surface A) in this terminal
+#   status menubar       -> start the menu-bar app (Surface B) in the background
 #   status menubar-stop
-#   status uninstall -> remove hooks from settings.json + delete state (back to stock)
+#   status float         -> start the always-on-top floating widget
+#   status autostart     -> start the menu-bar app automatically at login (LaunchAgent)
+#   status autostart-off
+#   status uninstall     -> remove hooks from settings.json + delete state (back to stock)
 #
 # Code lives wherever this script lives (the repo); runtime state lives in DATA.
 PY=/opt/homebrew/bin/python3
@@ -11,6 +14,7 @@ DIR="${0:A:h}"                       # this script's own directory (self-locatin
 BIN="$DIR/bin"
 DATA="$HOME/.claude/session-status"  # shared runtime data (state/, focus-request.json)
 MENUBAR="$BIN/ClaudeSessions.app/Contents/MacOS/ClaudeSessions"  # bundled (clickable notifications)
+AGENT="$HOME/Library/LaunchAgents/com.nije.claude-sessions.menubar.plist"
 
 case "$1" in
   dash|dashboard)
@@ -27,6 +31,28 @@ case "$1" in
     echo "menu-bar badge started (look top-right). Stop with: status menubar-stop" ;;
   menubar-stop)
     pkill -f "ClaudeSessions.app" && echo "menu bar stopped" || echo "not running" ;;
+  autostart)
+    mkdir -p "$HOME/Library/LaunchAgents"
+    cat > "$AGENT" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.nije.claude-sessions.menubar</string>
+    <key>ProgramArguments</key><array><string>$MENUBAR</string></array>
+    <key>RunAtLoad</key><true/>
+</dict>
+</plist>
+PLIST
+    launchctl unload "$AGENT" 2>/dev/null
+    pkill -f "ClaudeSessions.app" 2>/dev/null   # avoid a duplicate; launchd starts the managed one
+    sleep 0.3
+    launchctl load -w "$AGENT"
+    echo "menu-bar app set to start at login (and started now). Disable with: status autostart-off" ;;
+  autostart-off)
+    launchctl unload -w "$AGENT" 2>/dev/null
+    rm -f "$AGENT"
+    echo "login autostart removed (the app keeps running until you quit it)" ;;
   uninstall)
     "$PY" - "$HOME/.claude/settings.json" <<'PYEOF'
 import json,sys
@@ -41,5 +67,5 @@ PYEOF
     rm -rf "$DATA/state"
     echo "state cleared. Restart your Claude sessions to fully detach. (code in $DIR kept)" ;;
   *)
-    echo "usage: status {dash|float|float-stop|menubar|menubar-stop|uninstall}" ;;
+    echo "usage: status {dash|float|float-stop|menubar|menubar-stop|autostart|autostart-off|uninstall}" ;;
 esac

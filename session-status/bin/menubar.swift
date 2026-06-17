@@ -607,7 +607,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusClicked)
-        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp, .otherMouseUp])
         statusItem.button?.imagePosition = .imageLeading
 
         list = PopoverList()
@@ -691,11 +691,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// Left-click jumps to the top (most-urgent) session; right-/control-click opens the list.
+    /// Left-click jumps to the top session; right-/ctrl-click opens the list; middle-click
+    /// summons the always-on-top floating widget.
     @objc func statusClicked() {
         let e = NSApp.currentEvent
+        if e?.type == .otherMouseUp { openFloatdash(); return }
         let rightish = e?.type == .rightMouseUp || (e?.modifierFlags.contains(.control) ?? false)
         if rightish { togglePopover() } else { jumpToTop() }
+    }
+
+    /// Launch the floatdash binary (sibling of this .app in bin/) if it isn't already running.
+    private func openFloatdash() {
+        let bin = (Bundle.main.bundlePath as NSString).deletingLastPathComponent   // …/bin
+        let path = bin + "/floatdash"
+        if isProcessRunning(path) { return }
+        let p = Process(); p.executableURL = URL(fileURLWithPath: path)
+        try? p.run()
+    }
+
+    private func isProcessRunning(_ needle: String) -> Bool {
+        let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        p.arguments = ["-f", needle]
+        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = Pipe()
+        do { try p.run() } catch { return false }
+        p.waitUntilExit()
+        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return !out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Jump to the top non-muted session (sorted needs → your turn → working → idle → done).
