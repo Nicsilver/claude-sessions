@@ -24,16 +24,40 @@ func writeRequest(_ tty: String, action: String) {
 }
 func writeFocusRequest(_ tty: String) { if !tty.isEmpty { writeRequest(tty, action: "focus") } }
 
+let MUTES_PATH = (STATE_DIR as NSString).deletingLastPathComponent + "/mutes.json"
+
+/// Per-session "snooze" map (session id → epoch the mute expires). Muted chats sink to the
+/// bottom of the list until the time passes, then return to their normal spot. Shared by
+/// both surfaces via this file.
+func loadMutes() -> [String: Double] {
+    guard let data = FileManager.default.contents(atPath: MUTES_PATH),
+          let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [:] }
+    var out: [String: Double] = [:]
+    for (k, v) in obj { if let d = (v as? NSNumber)?.doubleValue { out[k] = d } }
+    return out
+}
+/// Middle-click toggle: mute a session for 1 hour, or unmute if it's already muted.
+func toggleMute(_ id: String) {
+    if id.isEmpty { return }
+    let now = Date().timeIntervalSince1970
+    var m = loadMutes().filter { $0.value > now }            // drop expired entries
+    if let until = m[id], until > now { m.removeValue(forKey: id) } else { m[id] = now + 3600 }
+    if let data = try? JSONSerialization.data(withJSONObject: m) {
+        try? data.write(to: URL(fileURLWithPath: MUTES_PATH))
+    }
+}
+
 func isAlive(_ pid: Int) -> Bool {
     if pid <= 0 { return true }
     return kill(pid_t(pid), 0) == 0 || errno == EPERM
 }
 
-struct Sess { var topic: String; var state: String; var updated: Double; var message: String; var tty: String }
+struct Sess { var id: String; var topic: String; var state: String; var updated: Double; var message: String; var tty: String; var muteUntil: Double }
 
 func loadSessions() -> [Sess] {
     let fm = FileManager.default
     guard let files = try? fm.contentsOfDirectory(atPath: STATE_DIR) else { return [] }
+    let mutes = loadMutes()
     var out: [Sess] = []
     for f in files where f.hasSuffix(".json") {
         let p = STATE_DIR + "/" + f
@@ -43,12 +67,15 @@ func loadSessions() -> [Sess] {
         if pid > 0, !isAlive(pid) { continue }
         let tty = (obj["tty"] as? String) ?? ""
         if tty.isEmpty { continue }   // hide IDE/ACP-spawned sessions (no terminal tab)
+        let id = (obj["session_id"] as? String) ?? ""
         out.append(Sess(
+            id: id,
             topic: (obj["topic"] as? String) ?? "?",
             state: (obj["state"] as? String) ?? "?",
             updated: (obj["updated_at"] as? Double) ?? 0,
             message: (obj["message"] as? String) ?? "",
-            tty: tty))
+            tty: tty,
+            muteUntil: mutes[id] ?? 0))
     }
     return out
 }
@@ -148,18 +175,25 @@ final class SessionRow: NSTableCellView {
 
     func configure(_ s: Sess) {
         nameLabel.stringValue = s.topic
-        nameLabel.textColor = (NAME_TINT && isActive(s.state)) ? style(s.state).color : .labelColor
-        var parts: [String] = []
-        if s.tty.isEmpty { parts.append("IDE") }
-        let age = ageStr(s.updated)
-        if !age.isEmpty { parts.append(age) }
-        metaLabel.stringValue = parts.joined(separator: " · ")
+        let muteLeft = s.muteUntil - Date().timeIntervalSince1970
+        if muteLeft > 0 {
+            nameLabel.textColor = .tertiaryLabelColor   // dimmed while muted
+            metaLabel.stringValue = "muted · \(max(1, Int(muteLeft / 60)))m"
+        } else {
+            nameLabel.textColor = (NAME_TINT && isActive(s.state)) ? style(s.state).color : .labelColor
+            var parts: [String] = []
+            if s.tty.isEmpty { parts.append("IDE") }
+            let age = ageStr(s.updated)
+            if !age.isEmpty { parts.append(age) }
+            metaLabel.stringValue = parts.joined(separator: " · ")
+        }
         toolTip = s.message.isEmpty ? nil : s.message
     }
 }
 
 final class DecoRowView: NSTableRowView {
     var state: String = "" { didSet { if state != oldValue { needsDisplay = true } } }
+    var muted = false { didSet { if muted != oldValue { needsDisplay = true } } }
     private var hovered = false { didSet { if hovered != oldValue { needsDisplay = true } } }
     private var hoverX: CGFloat = 0   // cursor x within the row; the glow blooms from here
 
@@ -205,6 +239,12 @@ final class DecoRowView: NSTableRowView {
             }
             NSGraphicsContext.restoreGraphicsState()
         }
+        if muted {
+            // Muted: dim bar, no glow.
+            NSColor.tertiaryLabelColor.setFill()
+            NSBezierPath(roundedRect: barRect(), xRadius: 1.5, yRadius: 1.5).fill()
+            return
+        }
         let col = style(state).color
         drawGlow(col, isActive(state))
         // Crisp bar on top — no shape-tracing shadow.
@@ -217,10 +257,18 @@ final class DecoRowView: NSTableRowView {
 /// lets a click on empty list space drag the window (like the header/footer background).
 final class ClickTable: NSTableView {
     var onRightClick: ((Int) -> Void)?
+    var onMiddleClick: ((Int) -> Void)?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }   // respond to the first click even when inactive
     override func rightMouseDown(with event: NSEvent) {
         let r = row(at: convert(event.locationInWindow, from: nil))
         if r >= 0 { onRightClick?(r) } else { super.rightMouseDown(with: event) }
+    }
+    override func otherMouseDown(with event: NSEvent) {
+        if event.buttonNumber == 2 {   // middle click → mute toggle
+            let r = row(at: convert(event.locationInWindow, from: nil))
+            if r >= 0 { onMiddleClick?(r); return }
+        }
+        super.otherMouseDown(with: event)
     }
     override func mouseDown(with event: NSEvent) {
         // On a row → normal click (jump); on empty space → drag the whole window.
@@ -331,6 +379,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
             guard let self, r < self.sessions.count else { return }
             writeRequest(self.sessions[r].tty, action: "close")   // right-click closes the tab
         }
+        tbl.onMiddleClick = { [weak self] r in
+            guard let self, r < self.sessions.count else { return }
+            toggleMute(self.sessions[r].id)                       // middle-click mutes for 1h
+            self.refresh()
+        }
         table = tbl
         table.style = .plain                  // same origin for bar (row) and text (cell)
         table.selectionHighlightStyle = .none  // no blue selection — click just jumps
@@ -425,8 +478,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
     }
 
     func refresh() {
+        let now = Date().timeIntervalSince1970
         sessions = loadSessions().sorted { a, b in
-            order(a.state) != order(b.state) ? order(a.state) < order(b.state) : a.updated > b.updated
+            let am = a.muteUntil > now, bm = b.muteUntil > now
+            if am != bm { return !am }   // muted rows sink to the bottom
+            if order(a.state) != order(b.state) { return order(a.state) < order(b.state) }
+            return a.updated > b.updated
         }
         if let cs = countStack {
             let counts = ["needs", "yourturn", "working", "done"].map { k in (k, sessions.filter { $0.state == k }.count) }
@@ -451,6 +508,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
             let r = DecoRowView(); r.identifier = id; return r
         }()
         rv.state = sessions[row].state
+        rv.muted = sessions[row].muteUntil > Date().timeIntervalSince1970
         return rv
     }
 

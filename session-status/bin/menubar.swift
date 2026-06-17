@@ -26,16 +26,38 @@ func writeRequest(_ tty: String, action: String) {
 }
 func writeFocusRequest(_ tty: String) { if !tty.isEmpty { writeRequest(tty, action: "focus") } }
 
+let MUTES_PATH = (STATE_DIR as NSString).deletingLastPathComponent + "/mutes.json"
+
+/// Per-session "snooze" map (session id → epoch the mute expires); shared with floatdash.
+func loadMutes() -> [String: Double] {
+    guard let data = FileManager.default.contents(atPath: MUTES_PATH),
+          let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [:] }
+    var out: [String: Double] = [:]
+    for (k, v) in obj { if let d = (v as? NSNumber)?.doubleValue { out[k] = d } }
+    return out
+}
+/// Middle-click toggle: mute a session for 1 hour, or unmute if it's already muted.
+func toggleMute(_ id: String) {
+    if id.isEmpty { return }
+    let now = Date().timeIntervalSince1970
+    var m = loadMutes().filter { $0.value > now }
+    if let until = m[id], until > now { m.removeValue(forKey: id) } else { m[id] = now + 3600 }
+    if let data = try? JSONSerialization.data(withJSONObject: m) {
+        try? data.write(to: URL(fileURLWithPath: MUTES_PATH))
+    }
+}
+
 func isAlive(_ pid: Int) -> Bool {
     if pid <= 0 { return true }
     return kill(pid_t(pid), 0) == 0 || errno == EPERM
 }
 
-struct Sess { var id: String; var topic: String; var state: String; var updated: Double; var message: String; var tty: String }
+struct Sess { var id: String; var topic: String; var state: String; var updated: Double; var message: String; var tty: String; var muteUntil: Double }
 
 func loadSessions() -> [Sess] {
     let fm = FileManager.default
     guard let files = try? fm.contentsOfDirectory(atPath: STATE_DIR) else { return [] }
+    let mutes = loadMutes()
     var out: [Sess] = []
     for f in files where f.hasSuffix(".json") {
         let p = STATE_DIR + "/" + f
@@ -45,13 +67,15 @@ func loadSessions() -> [Sess] {
         if pid > 0, !isAlive(pid) { continue }
         let tty = (obj["tty"] as? String) ?? ""
         if tty.isEmpty { continue }   // hide IDE/ACP-spawned sessions (no terminal tab)
+        let id = (obj["session_id"] as? String) ?? ""
         out.append(Sess(
-            id: (obj["session_id"] as? String) ?? "",
+            id: id,
             topic: (obj["topic"] as? String) ?? "?",
             state: (obj["state"] as? String) ?? "?",
             updated: (obj["updated_at"] as? Double) ?? 0,
             message: (obj["message"] as? String) ?? "",
-            tty: tty))
+            tty: tty,
+            muteUntil: mutes[id] ?? 0))
     }
     return out
 }
@@ -161,18 +185,25 @@ final class SessionRow: NSTableCellView {
 
     func configure(_ s: Sess) {
         nameLabel.stringValue = s.topic
-        nameLabel.textColor = (NAME_TINT && isActive(s.state)) ? style(s.state).color : .labelColor
-        var parts: [String] = []
-        if s.tty.isEmpty { parts.append("IDE") }
-        let age = ageStr(s.updated)
-        if !age.isEmpty { parts.append(age) }
-        metaLabel.stringValue = parts.joined(separator: " · ")
+        let muteLeft = s.muteUntil - Date().timeIntervalSince1970
+        if muteLeft > 0 {
+            nameLabel.textColor = .tertiaryLabelColor
+            metaLabel.stringValue = "muted · \(max(1, Int(muteLeft / 60)))m"
+        } else {
+            nameLabel.textColor = (NAME_TINT && isActive(s.state)) ? style(s.state).color : .labelColor
+            var parts: [String] = []
+            if s.tty.isEmpty { parts.append("IDE") }
+            let age = ageStr(s.updated)
+            if !age.isEmpty { parts.append(age) }
+            metaLabel.stringValue = parts.joined(separator: " · ")
+        }
         toolTip = s.message.isEmpty ? nil : s.message
     }
 }
 
 final class DecoRowView: NSTableRowView {
     var state: String = "" { didSet { if state != oldValue { needsDisplay = true } } }
+    var muted = false { didSet { if muted != oldValue { needsDisplay = true } } }
     private var hovered = false { didSet { if hovered != oldValue { needsDisplay = true } } }
     private var hoverX: CGFloat = 0
 
@@ -216,6 +247,11 @@ final class DecoRowView: NSTableRowView {
             }
             NSGraphicsContext.restoreGraphicsState()
         }
+        if muted {
+            NSColor.tertiaryLabelColor.setFill()
+            NSBezierPath(roundedRect: barRect(), xRadius: 1.5, yRadius: 1.5).fill()
+            return
+        }
         let col = style(state).color
         drawGlow(col, isActive(state))
         col.setFill()
@@ -226,10 +262,18 @@ final class DecoRowView: NSTableRowView {
 /// Right-click a row → immediate action (no context menu). No window-drag (it's a popover).
 final class ClickTable: NSTableView {
     var onRightClick: ((Int) -> Void)?
+    var onMiddleClick: ((Int) -> Void)?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func rightMouseDown(with event: NSEvent) {
         let r = row(at: convert(event.locationInWindow, from: nil))
         if r >= 0 { onRightClick?(r) } else { super.rightMouseDown(with: event) }
+    }
+    override func otherMouseDown(with event: NSEvent) {
+        if event.buttonNumber == 2 {
+            let r = row(at: convert(event.locationInWindow, from: nil))
+            if r >= 0 { onMiddleClick?(r); return }
+        }
+        super.otherMouseDown(with: event)
     }
     override func menu(for event: NSEvent) -> NSMenu? { nil }
 }
@@ -316,6 +360,10 @@ final class PopoverList: NSViewController, NSTableViewDataSource, NSTableViewDel
             guard let self, r < self.sessions.count else { return }
             writeRequest(self.sessions[r].tty, action: "close")
         }
+        tbl.onMiddleClick = { [weak self] r in
+            guard let self, r < self.sessions.count else { return }
+            toggleMute(self.sessions[r].id); self.refresh()
+        }
         table = tbl
         table.style = .plain
         table.selectionHighlightStyle = .none
@@ -394,8 +442,12 @@ final class PopoverList: NSViewController, NSTableViewDataSource, NSTableViewDel
     }
 
     func refresh() {
+        let now = Date().timeIntervalSince1970
         sessions = loadSessions().sorted { a, b in
-            order(a.state) != order(b.state) ? order(a.state) < order(b.state) : a.updated > b.updated
+            let am = a.muteUntil > now, bm = b.muteUntil > now
+            if am != bm { return !am }   // muted rows sink to the bottom
+            if order(a.state) != order(b.state) { return order(a.state) < order(b.state) }
+            return a.updated > b.updated
         }
         let counts = ["needs", "yourturn", "working", "done"].map { k in (k, sessions.filter { $0.state == k }.count) }
         countStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -412,6 +464,7 @@ final class PopoverList: NSViewController, NSTableViewDataSource, NSTableViewDel
             let r = DecoRowView(); r.identifier = id; return r
         }()
         rv.state = sessions[row].state
+        rv.muted = sessions[row].muteUntil > Date().timeIntervalSince1970
         return rv
     }
 
@@ -645,9 +698,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         if rightish { togglePopover() } else { jumpToTop() }
     }
 
-    /// Sorted like the list (needs → your turn → working → idle → done, newest first); jump to #1.
+    /// Jump to the top non-muted session (sorted needs → your turn → working → idle → done).
     func jumpToTop() {
-        let top = loadSessions().sorted { a, b in
+        let now = Date().timeIntervalSince1970
+        let top = loadSessions().filter { $0.muteUntil <= now }.sorted { a, b in
             order(a.state) != order(b.state) ? order(a.state) < order(b.state) : a.updated > b.updated
         }.first
         if let top { writeFocusRequest(top.tty) }
@@ -666,10 +720,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
     /// has just flipped INTO "needs" (seeded on first run so we don't notify on launch).
     func tick() {
         let s = loadSessions()
+        let now = Date().timeIntervalSince1970
+        let active = s.filter { $0.muteUntil <= now }   // muted chats don't drive the badge/alerts
 
-        let needs = s.filter { $0.state == "needs" }.count
-        let yt = s.filter { $0.state == "yourturn" }.count
-        let working = s.filter { $0.state == "working" }.count
+        let needs = active.filter { $0.state == "needs" }.count
+        let yt = active.filter { $0.state == "yourturn" }.count
+        let working = active.filter { $0.state == "working" }.count
         if let button = statusItem.button {
             if needs > 0 { button.image = pillImage(.systemRed);    button.title = " \(needs)" }
             else if yt > 0 { button.image = pillImage(.systemYellow); button.title = " \(yt)" }
@@ -678,9 +734,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNot
         }
 
         if seeded {
-            for x in s where x.state == "needs" && prevStates[x.id] != "needs" { notifyNeeds(x) }
+            for x in active where x.state == "needs" && prevStates[x.id] != "needs" { notifyNeeds(x) }
         }
-        prevStates = Dictionary(s.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
+        prevStates = Dictionary(s.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })  // track all so unmute alone doesn't re-fire
         seeded = true
     }
 }
