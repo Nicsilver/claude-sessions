@@ -48,6 +48,26 @@ func toggleMute(_ id: String) {
     }
 }
 
+let LABELS_PATH = (STATE_DIR as NSString).deletingLastPathComponent + "/labels.json"
+
+/// Custom session names (⌥-click to rename); shared with floatdash + record.py.
+func loadLabels() -> [String: String] {
+    guard let data = FileManager.default.contents(atPath: LABELS_PATH),
+          let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [:] }
+    var out: [String: String] = [:]
+    for (k, v) in obj { if let s = v as? String { out[k] = s } }
+    return out
+}
+func setLabel(_ id: String, _ name: String) {
+    if id.isEmpty { return }
+    var m = loadLabels()
+    let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    if n.isEmpty { m.removeValue(forKey: id) } else { m[id] = n }
+    if let data = try? JSONSerialization.data(withJSONObject: m) {
+        try? data.write(to: URL(fileURLWithPath: LABELS_PATH))
+    }
+}
+
 func isAlive(_ pid: Int) -> Bool {
     if pid <= 0 { return true }
     return kill(pid_t(pid), 0) == 0 || errno == EPERM
@@ -59,6 +79,7 @@ func loadSessions() -> [Sess] {
     let fm = FileManager.default
     guard let files = try? fm.contentsOfDirectory(atPath: STATE_DIR) else { return [] }
     let mutes = loadMutes()
+    let labels = loadLabels()
     var out: [Sess] = []
     for f in files where f.hasSuffix(".json") {
         let p = STATE_DIR + "/" + f
@@ -71,7 +92,7 @@ func loadSessions() -> [Sess] {
         let id = (obj["session_id"] as? String) ?? ""
         out.append(Sess(
             id: id,
-            topic: (obj["topic"] as? String) ?? "?",
+            topic: labels[id] ?? ((obj["topic"] as? String) ?? "?"),   // custom rename wins
             state: (obj["state"] as? String) ?? "?",
             updated: (obj["updated_at"] as? Double) ?? 0,
             message: (obj["message"] as? String) ?? "",
@@ -264,6 +285,7 @@ final class DecoRowView: NSTableRowView {
 final class ClickTable: NSTableView {
     var onRightClick: ((Int) -> Void)?
     var onMiddleClick: ((Int) -> Void)?
+    var onRename: ((Int) -> Void)?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func rightMouseDown(with event: NSEvent) {
         let r = row(at: convert(event.locationInWindow, from: nil))
@@ -275,6 +297,11 @@ final class ClickTable: NSTableView {
             if r >= 0 { onMiddleClick?(r); return }
         }
         super.otherMouseDown(with: event)
+    }
+    override func mouseDown(with event: NSEvent) {
+        let r = row(at: convert(event.locationInWindow, from: nil))
+        if r >= 0, event.modifierFlags.contains(.option) { onRename?(r); return }   // ⌥-click → rename
+        super.mouseDown(with: event)
     }
     override func menu(for event: NSEvent) -> NSMenu? { nil }
 }
@@ -365,6 +392,7 @@ final class PopoverList: NSViewController, NSTableViewDataSource, NSTableViewDel
             guard let self, r < self.sessions.count else { return }
             toggleMute(self.sessions[r].id); self.refresh()
         }
+        tbl.onRename = { [weak self] r in self?.renameSession(r) }
         table = tbl
         table.style = .plain
         table.selectionHighlightStyle = .none
@@ -427,6 +455,27 @@ final class PopoverList: NSViewController, NSTableViewDataSource, NSTableViewDel
     }
 
     @objc func openSettings() { onActivate?(); onSettings?() }
+
+    /// ⌥-click a row → rename it (stored in labels.json; blank clears it).
+    func renameSession(_ row: Int) {
+        guard row >= 0, row < sessions.count else { return }
+        let s = sessions[row]
+        onActivate?()   // close the popover so the dialog is front
+        let alert = NSAlert()
+        alert.messageText = "Rename session"
+        alert.informativeText = "Custom name (leave blank to clear):"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = loadLabels()[s.id] ?? ""
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            setLabel(s.id, field.stringValue)
+            refresh()
+        }
+    }
 
     private func chip(_ stateKey: String, _ count: Int) -> NSView {
         let st = style(stateKey)

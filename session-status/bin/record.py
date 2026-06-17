@@ -56,10 +56,10 @@ def main():
     pid = (reg.get("pid") if reg else None) or os.getppid()
     transcript = data.get("transcript_path")
     topic = prev.get("topic")
-    # Recompute the label on meaningful events (name/ai-title/first-prompt can
-    # appear or change); reuse the cache on hot-path PostToolUse "working" pings.
-    if not topic or state in ("start", "done") or (state == "working" and data.get("prompt")):
-        topic = derive_label(reg, cwd, transcript) or topic
+    # Recompute the label on meaningful events (name/title/prompt can appear or change), or
+    # whenever a custom rename exists (so it applies promptly); reuse the cache otherwise.
+    if custom_label(sid) or not topic or state in ("start", "done") or (state == "working" and data.get("prompt")):
+        topic = derive_label(sid, reg, cwd, transcript) or topic
 
     eff = "idle" if state == "start" else state
     msg = sanitize(data.get("message"))
@@ -104,20 +104,68 @@ def main():
     return 0
 
 
-def derive_label(reg, cwd, transcript_path):
-    """A human-meaningful session label: the user's /rename name, else the
-    AI-generated title, else the first prompt, else the git branch (AGI-XXXXX in
-    worktrees), else the folder name."""
+LABELS_PATH = os.path.join(BASE, "labels.json")
+DEFAULT_BRANCHES = {"main", "master", "develop", "trunk"}
+# Titles Claude sometimes generates that describe the *conversation* rather than the task —
+# treat these as low-value so we fall through to the latest real prompt.
+META_TITLES = {
+    "dig deeper and follow up", "dig deeper", "follow up", "follow-up", "continue",
+    "keep going", "next", "next steps", "more", "help", "untitled", "new chat",
+    "wip", "test", "testing", "debugging", "conversation",
+}
+TRIVIAL_PROMPTS = {
+    "yes", "no", "y", "n", "ok", "okay", "sure", "go", "do it", "continue", "proceed",
+    "next", "commit", "push", "thanks", "ty", "yep", "yeah", "nope", "stop", "wait",
+    "please", "done", "good", "perfect", "nice", "cool", "great", "fix it", "go on",
+    "keep going", "carry on",
+}
+
+
+def custom_label(sid):
+    """A user-set rename for this session (from the widget's ⌥-click), if any."""
+    try:
+        with open(LABELS_PATH) as f:
+            v = json.load(f).get(sid)
+        return v.strip() if isinstance(v, str) and v.strip() else None
+    except Exception:
+        return None
+
+
+def is_substantial(txt):
+    """A user prompt worth using as a label — not a command, caveat, or filler."""
+    if not txt or txt[0] == "<" or txt.startswith("Caveat:"):
+        return False
+    s = txt.strip().lower().rstrip(".!?")
+    return len(s) >= 6 and s not in TRIVIAL_PROMPTS
+
+
+def short(txt, n=44):
+    """Trim to n chars on a word boundary with an ellipsis."""
+    txt = txt.strip()
+    if len(txt) <= n:
+        return txt
+    return (txt[:n].rsplit(" ", 1)[0] or txt[:n]) + "…"
+
+
+def derive_label(sid, reg, cwd, transcript_path):
+    """A human-meaningful session label, best-first:
+    custom rename → Claude /rename → meaningful git branch (AGI-XXXXX in worktrees) →
+    decent AI title → latest substantial prompt → folder name."""
+    c = custom_label(sid)
+    if c:
+        return c
     if reg and (reg.get("name") or "").strip():
         return reg["name"].strip()
-    title, first = transcript_titles(transcript_path)
-    if title:
-        return title
-    if first:
-        return first[:46]
+    title, latest = transcript_titles(transcript_path)
     br = git_branch(cwd)
-    if br:
-        return br
+    if br and br.lower() not in DEFAULT_BRANCHES:   # feature/AGI branch = descriptive
+        return short(br)
+    if title and title.strip().lower() not in META_TITLES:
+        return title
+    if latest:
+        return short(latest)
+    if title:                                       # a meta title still beats the bare folder
+        return title
     return os.path.basename(cwd.rstrip("/")) or cwd
 
 
@@ -139,10 +187,10 @@ def registry_for(sid):
 
 
 def transcript_titles(path):
-    """(title, first_user_prompt) from the transcript — title is the latest
-    custom/ai title, first_user_prompt is the first real user message."""
+    """(title, latest_prompt): title = the latest custom/ai title; latest_prompt = the most
+    recent *substantial* user message (reflects current focus better than the first one)."""
     title = ""
-    first = ""
+    latest = ""
     for obj in read_all_entries(path):
         if not isinstance(obj, dict):
             continue
@@ -151,12 +199,12 @@ def transcript_titles(path):
             title = obj["aiTitle"].strip()
         elif t == "custom-title" and obj.get("customTitle"):
             title = obj["customTitle"].strip()
-        elif not first and t == "user":
+        elif t == "user":
             m = obj.get("message") if isinstance(obj.get("message"), dict) else obj
-            txt = extract_text(m.get("content")).strip()
-            if txt and txt[0] not in "<" and not txt.startswith("Caveat:"):
-                first = txt.replace("\n", " ")
-    return title, first
+            txt = extract_text(m.get("content")).strip().replace("\n", " ")
+            if is_substantial(txt):
+                latest = txt
+    return title, latest
 
 
 def git_branch(cwd):
