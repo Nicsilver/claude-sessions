@@ -343,6 +343,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
     var panel: NSPanel!
     var countStack: NSStackView?
     var table: NSTableView!
+    var scroll: NSScrollView!
     var emptyLabel: NSTextField!
     var sessions: [Sess] = []
     var timer: Timer?
@@ -363,7 +364,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isMovableByWindowBackground = true
-        panel.minSize = NSSize(width: 240, height: 140)
+        // Height is driven by content (see adjustHeight); keep the floor low enough that a
+        // single-row / empty panel can shrink all the way down. Width stays user-resizable.
+        panel.minSize = NSSize(width: 240, height: 70)
         panel.delegate = self
 
         let content = NSView()
@@ -388,7 +391,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         sep.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(sep)
 
-        let scroll = NSScrollView()
+        scroll = NSScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.hasVerticalScroller = true
         scroll.scrollerStyle = .overlay        // hidden; fades in only while scrolling
@@ -542,6 +545,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         if let t = selectedTty, let i = sessions.firstIndex(where: { $0.tty == t }) {
             table.selectRowIndexes(IndexSet(integer: i), byExtendingSelection: false)
         }
+        adjustHeight()
+    }
+
+    /// Resize the panel's height to fit the current row count, growing/shrinking from the top
+    /// edge so it stays pinned where it is. The scroll view is the only vertical-flexible
+    /// element, so the surrounding chrome (titlebar, separator, count chips, gaps) is a constant
+    /// we can read off the live layout. A long list is clamped to the screen and scrolls instead.
+    private func adjustHeight() {
+        guard scroll != nil else { return }
+        panel.contentView?.layoutSubtreeIfNeeded()
+
+        let chrome = panel.frame.height - scroll.frame.height       // everything that isn't the list
+        let perRow = table.rowHeight + table.intercellSpacing.height
+        let insets = scroll.contentInsets.top + scroll.contentInsets.bottom
+        let rows = CGFloat(max(1, sessions.count))                  // keep a row of room for the empty label
+        let listH = rows * perRow + insets
+
+        let vf = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+        let maxH = max(chrome + perRow + insets, vf.height - 40)     // cap to screen; longer lists scroll
+        var target = (chrome + listH).rounded()
+        target = min(max(target, chrome + perRow + insets), maxH)
+
+        let cur = panel.frame
+        if abs(cur.height - target) < 0.5 { return }
+        // Keep the top edge fixed: anchor by maxY so the panel grows downward / shrinks upward.
+        let newFrame = NSRect(x: cur.minX, y: cur.maxY - target, width: cur.width, height: target)
+        panel.setFrame(newFrame, display: true, animate: false)
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { sessions.count }
