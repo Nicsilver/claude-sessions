@@ -1,0 +1,3 @@
+# .NET build output for the WPF widget
+bin/
+obj/
