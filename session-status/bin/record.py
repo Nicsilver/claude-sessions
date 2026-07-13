@@ -17,6 +17,7 @@ import sys, os, json, time, subprocess, tempfile
 
 BASE = os.path.expanduser("~/.claude/session-status")
 STATE_DIR = os.path.join(BASE, "state")
+IS_WIN = os.name == "nt"
 
 
 def main():
@@ -46,7 +47,8 @@ def main():
 
     prev = {}
     try:
-        with open(path) as f:
+        # utf-8-sig tolerates a BOM if some other Windows tool wrote the file.
+        with open(path, encoding="utf-8-sig") as f:
             prev = json.load(f)
     except Exception:
         prev = {}
@@ -94,6 +96,13 @@ def main():
         "ppid": os.getppid(),
         "updated_at": time.time(),
     }
+    # Windows has no tty; locate the owning terminal window instead so the widget
+    # can focus it (wt / jetbrains / vscode / console) and knows which pid to raise.
+    if IS_WIN:
+        term, term_pid = win_terminal(pid)
+        rec["terminal"] = term
+        rec["term_pid"] = term_pid
+        rec["tab_title"] = win_tab_title(transcript, topic)   # for WT per-tab focus via UIA
     if eff in ("needs", "yourturn") and msg:
         rec["message"] = msg
 
@@ -222,7 +231,10 @@ def git_branch(cwd):
 
 def tty_of(pid):
     """Controlling terminal of a pid (e.g. 'ttys004'); '' if none (headless / IDE
-    agent), which also lets the surfaces tag those sessions."""
+    agent), which also lets the surfaces tag those sessions. Unix only — Windows
+    has no tty; there we locate the owning terminal window instead (win_terminal)."""
+    if IS_WIN:
+        return ""
     try:
         out = subprocess.run(["ps", "-o", "tty=", "-p", str(pid)],
                              capture_output=True, text=True, timeout=1.5)
@@ -230,6 +242,120 @@ def tty_of(pid):
         return "" if (not t or t in ("??", "?")) else t
     except Exception:
         return ""
+
+
+# JetBrains IDE launcher exe names (their embedded terminal is the tab we jump to).
+JETBRAINS_EXES = {
+    "idea64.exe", "idea.exe", "pycharm64.exe", "pycharm.exe", "webstorm64.exe",
+    "clion64.exe", "goland64.exe", "phpstorm64.exe", "rider64.exe", "rubymine64.exe",
+    "datagrip64.exe", "rustrover64.exe", "aqua64.exe", "fleet.exe",
+}
+
+
+def win_process_map():
+    """{pid: (parent_pid, exe_name_lower)} for every running process, via the
+    Toolhelp snapshot API. ctypes-only so record.py stays dependency-free."""
+    import ctypes
+    from ctypes import wintypes
+
+    class PROCESSENTRY32(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_char * 260),
+        ]
+
+    k = ctypes.windll.kernel32
+    TH32CS_SNAPPROCESS = 0x00000002
+    INVALID = ctypes.c_void_p(-1).value
+    snap = k.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snap == INVALID:
+        return {}
+    out = {}
+    try:
+        e = PROCESSENTRY32()
+        e.dwSize = ctypes.sizeof(PROCESSENTRY32)
+        ok = k.Process32First(snap, ctypes.byref(e))
+        while ok:
+            name = e.szExeFile.decode("latin-1", "ignore").lower()
+            out[int(e.th32ProcessID)] = (int(e.th32ParentProcessID), name)
+            ok = k.Process32Next(snap, ctypes.byref(e))
+    finally:
+        k.CloseHandle(snap)
+    return out
+
+
+def win_console_title():
+    """The current console/pseudo-console title (what Windows Terminal shows on the tab).
+    Claude Code sets this to the session's task title via an OSC escape; a hook subprocess
+    shares that ConPTY, so GetConsoleTitle reads the exact tab text. Returns "" if it just
+    looks like a shell path (i.e. Claude hasn't set a title)."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        ctypes.windll.kernel32.GetConsoleTitleW(buf, 1024)
+        t = (buf.value or "").strip()
+    except Exception:
+        return ""
+    low = t.lower()
+    if not t or ".exe" in low or low.endswith(("bash", "pwsh", "cmd", "powershell")):
+        return ""   # a shell's own title, not Claude's task title
+    return t
+
+
+def win_tab_title(transcript_path, topic):
+    """Best guess of the Windows Terminal tab title for this session, so the widget can
+    match a session to its tab (WT exposes tab titles but not per-tab pids). Prefer the live
+    console title, then the transcript's AI/custom title, then the derived topic."""
+    ct = win_console_title()
+    if ct:
+        return ct
+    title, _ = transcript_titles(transcript_path)
+    return title or (topic or "")
+
+
+def win_terminal(start_pid):
+    """(terminal, term_pid): identify the terminal that owns this session by walking
+    the process tree up from the Claude process. term_pid is the ancestor whose
+    top-level window the widget should focus.
+      "wt"       -> Windows Terminal (focus the WindowsTerminal.exe window)
+      "jetbrains"-> a JetBrains IDE (tab-precise jump handled by the plugin, by pid)
+      "vscode"   -> VS Code integrated terminal
+      "console"  -> classic conhost / OpenConsole window
+      "other"    -> unknown; fall back to the nearest ancestor
+    Returns ("", 0) if the tree can't be read."""
+    try:
+        pmap = win_process_map()
+    except Exception:
+        return ("", 0)
+    chain, pid, seen = [], start_pid, set()
+    for _ in range(30):
+        if pid in seen or pid not in pmap:
+            break
+        seen.add(pid)
+        ppid, name = pmap[pid]
+        chain.append((pid, name))
+        pid = ppid
+    for pid, name in chain:
+        if name == "windowsterminal.exe":
+            return ("wt", pid)
+    for pid, name in chain:
+        if name in JETBRAINS_EXES:
+            return ("jetbrains", pid)
+    for pid, name in chain:
+        if name == "code.exe":
+            return ("vscode", pid)
+    for pid, name in chain:
+        if name in ("conhost.exe", "openconsole.exe"):
+            return ("console", pid)
+    return ("other", chain[0][0] if chain else start_pid)
 
 
 def read_all_entries(path):
