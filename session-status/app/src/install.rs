@@ -208,6 +208,12 @@ mod tests {
             "/opt/homebrew/bin/python3 /x/session-status/bin/record.py working"
         ));
         assert!(is_recorder_cmd("/usr/local/bin/record done"));
+        // Quoted path with our binary — forward slashes parse the same on every OS.
+        assert!(is_recorder_cmd(
+            "\"/Users/me/ClaudeSessions/claude-sessions\" record needs"
+        ));
+        // On Windows the hook path uses backslashes, which must resolve to our stem too.
+        #[cfg(windows)]
         assert!(is_recorder_cmd(
             "\"C:\\Users\\me\\AppData\\Local\\ClaudeSessions\\claude-sessions.exe\" record needs"
         ));
