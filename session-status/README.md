@@ -59,3 +59,27 @@ Point Claude Code's hooks (in `~/.claude/settings.json`) at `bin/record.py`, e.g
 
 Events: `SessionStart → start`, `UserPromptSubmit`/`PostToolUse → working`,
 `Notification → needs`, `Stop → done`, `SessionEnd → end`.
+
+## Turn markers (recommended `CLAUDE.md` setup)
+
+When a turn ends (the `Stop` hook), the recorder decides between **Done** and **Your turn** by
+looking at the last line of Claude's final message:
+
+- `✅` on the last line → **Done** (finished, safe to close).
+- `⏳` on the last line → **Your turn** (Claude is waiting on you — soft yellow, no notification).
+- No marker → a weaker fallback: a final line ending in `?` is treated as *your turn*, otherwise *done*.
+
+(The urgent red **Needs you** state is separate — it comes from the `Notification` hook, e.g. a
+permission or plan-approval prompt — and doesn't depend on markers.)
+
+To make the Done / Your-turn split reliable, add an instruction to your **global**
+`~/.claude/CLAUDE.md` so Claude always emits a marker, e.g.:
+
+```md
+At the end of every response, put a status marker on its own final line:
+- `✅` when the task is complete and you need nothing from me.
+- `⏳` when you are waiting on me (a question, a decision, or confirmation).
+```
+
+This is optional — everything else works without it — but it's what powers the accurate
+your-turn vs done states across all surfaces (menu bar, floating dashboard, Windows widget, plugin).
