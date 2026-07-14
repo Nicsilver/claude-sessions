@@ -37,6 +37,9 @@ pub fn run() -> tauri::Result<()> {
             set_config
         ])
         .setup(|app| {
+            // Menu-bar-only app: no Dock icon, no app switcher entry.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             setup_tray(app.handle())?;
             if let Some(win) = app.get_webview_window("main") {
                 position_top_right(&win);

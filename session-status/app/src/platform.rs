@@ -242,9 +242,77 @@ mod imp {
 #[cfg(unix)]
 mod imp {
     use super::*;
+    use std::collections::{HashMap, HashSet};
+
+    /// App bundle names that mean "a JetBrains IDE hosts this session" — matched against the
+    /// lowercased basename of each ancestor's comm. The id "jetbrains" is the contract with
+    /// terminals/jetbrains.rs (and the IntelliJ plugin behind it).
+    const JETBRAINS_APPS: &[&str] = &[
+        "idea", "intellij", "jetbrains", "pycharm", "webstorm", "clion", "goland",
+        "phpstorm", "rider", "rubymine", "datagrip", "rustrover", "aqua", "fleet",
+    ];
 
     pub fn parent_pid(_pid: i64) -> i64 {
         unsafe { libc::getppid() as i64 }
+    }
+
+    /// pid → (parent pid, comm) for every process, from one `ps` call. comm can be a full
+    /// path containing spaces ("…/IntelliJ IDEA.app/…/idea"), so split only twice.
+    fn process_map() -> HashMap<i64, (i64, String)> {
+        let mut map = HashMap::new();
+        let Ok(o) = std::process::Command::new("ps").args(["-axo", "pid=,ppid=,comm="]).output()
+        else {
+            return map;
+        };
+        for line in String::from_utf8_lossy(&o.stdout).lines() {
+            let t = line.trim_start();
+            let Some((pid_s, rest)) = t.split_once(char::is_whitespace) else { continue };
+            let rest = rest.trim_start();
+            let Some((ppid_s, comm)) = rest.split_once(char::is_whitespace) else { continue };
+            let (Ok(pid), Ok(ppid)) = (pid_s.parse::<i64>(), ppid_s.parse::<i64>()) else {
+                continue;
+            };
+            map.insert(pid, (ppid, comm.trim().to_string()));
+        }
+        map
+    }
+
+    /// The unix analogue of win_terminal(): walk the parent chain and identify the hosting
+    /// terminal app. Sessions with neither a terminal id nor a term_pid are hidden by the
+    /// widget, so "other" still carries a pid to keep unknown hosts visible.
+    fn unix_terminal(start: i64) -> (String, i64) {
+        let pmap = process_map();
+        let mut chain: Vec<(i64, String)> = Vec::new();
+        let (mut pid, mut seen) = (start, HashSet::new());
+        for _ in 0..30 {
+            if pid <= 1 || seen.contains(&pid) {
+                break;
+            }
+            let Some((ppid, comm)) = pmap.get(&pid) else { break };
+            seen.insert(pid);
+            let base = std::path::Path::new(comm)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            chain.push((pid, base));
+            pid = *ppid;
+        }
+        for (p, n) in &chain {
+            if JETBRAINS_APPS.iter().any(|a| n.contains(a)) {
+                return ("jetbrains".into(), *p);
+            }
+        }
+        for (p, n) in &chain {
+            if n.contains("iterm") {
+                return ("iterm".into(), *p);
+            }
+        }
+        for (p, n) in &chain {
+            if n == "terminal" {
+                return ("terminal".into(), *p);
+            }
+        }
+        ("other".into(), chain.first().map(|(p, _)| *p).unwrap_or(start))
     }
 
     pub fn is_alive(pid: i64) -> bool {
@@ -278,6 +346,9 @@ mod imp {
 
     pub fn annotate(rec: &mut Map<String, Value>, pid: i64, _transcript: &str, _topic: &str) {
         rec.insert("tty".into(), json!(tty_of(pid)));
+        let (term, term_pid) = unix_terminal(pid);
+        rec.insert("terminal".into(), json!(term));
+        rec.insert("term_pid".into(), json!(term_pid));
     }
 
     pub fn attach_parent_console() {} // unix CLIs already share the terminal's stdio

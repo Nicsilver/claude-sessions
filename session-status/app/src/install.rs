@@ -16,23 +16,40 @@ const EVENTS: &[(&str, &str)] = &[
     ("SessionEnd", "end"),
 ];
 
-fn markers() -> Vec<String> {
-    let mut m = vec!["claude-sessions".to_string(), "record.py".to_string()];
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(stem) = exe.file_stem().and_then(|s| s.to_str()) {
-            m.push(stem.to_string());
-        }
+/// A hook command is ours when its *executable* is a recorder build: record.py, the old
+/// compiled `record` prototype, this exe, or anything named claude-sessions. Matching the
+/// executable token — not the whole command string — keeps unrelated hooks that merely live
+/// under a "claude-sessions" directory (e.g. a worklog script in the same repo) untouched.
+fn is_recorder_cmd(cmd: &str) -> bool {
+    if cmd.contains("record.py") {
+        return true;
     }
-    m
+    let t = cmd.trim_start();
+    let exe = if let Some(rest) = t.strip_prefix('"') {
+        rest.split('"').next().unwrap_or("")
+    } else {
+        t.split_whitespace().next().unwrap_or("")
+    };
+    let stem = Path::new(exe)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    stem == "record" || stem == "claude-sessions" || Some(stem) == exe_stem()
 }
 
-fn is_ours(group: &Value, markers: &[String]) -> bool {
-    group.get("hooks").and_then(Value::as_array).is_some_and(|hooks| {
-        hooks.iter().any(|h| {
-            let cmd = str_of(h, "command");
-            markers.iter().any(|m| cmd.contains(m.as_str()))
-        })
-    })
+fn exe_stem() -> Option<String> {
+    std::env::current_exe()
+        .ok()?
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_lowercase())
+}
+
+fn is_ours(group: &Value) -> bool {
+    group
+        .get("hooks")
+        .and_then(Value::as_array)
+        .is_some_and(|hooks| hooks.iter().any(|h| is_recorder_cmd(&str_of(h, "command"))))
 }
 
 fn our_command() -> String {
@@ -67,7 +84,6 @@ pub fn run(install: bool) -> i32 {
     if !root.is_object() {
         root = json!({});
     }
-    let markers = markers();
     let obj = root.as_object_mut().unwrap();
     let hooks = obj.entry("hooks").or_insert_with(|| json!({}));
     if !hooks.is_object() {
@@ -80,7 +96,7 @@ pub fn run(install: bool) -> i32 {
         for (event, state) in EVENTS {
             let groups = hooks.entry(event.to_string()).or_insert_with(|| json!([]));
             let arr = groups.as_array_mut().unwrap();
-            arr.retain(|g| !is_ours(g, &markers));
+            arr.retain(|g| !is_ours(g));
             arr.push(json!({
                 "hooks": [ { "type": "command", "command": format!("{} {}", our_command(), state) } ]
             }));
@@ -91,7 +107,7 @@ pub fn run(install: bool) -> i32 {
         for event in keys {
             if let Some(arr) = hooks.get_mut(&event).and_then(Value::as_array_mut) {
                 let before = arr.len();
-                arr.retain(|g| !is_ours(g, &markers));
+                arr.retain(|g| !is_ours(g));
                 changed += before - arr.len();
                 if arr.is_empty() {
                     hooks.remove(&event);

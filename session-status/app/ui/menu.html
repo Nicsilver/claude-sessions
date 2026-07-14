@@ -96,7 +96,8 @@ async function open(payload) {
   await appWindow.setSize(new PhysicalSize(w, h));
   const m = payload.monitor;
   let x = payload.x - w + 12 * sf;             // right edge (minus gutter) at the cursor
-  let y = payload.y - h + 8 * sf;              // opens upward (tray lives at the bottom)
+  let y = payload.y - h + 8 * sf;              // opens upward (Windows tray lives at the bottom)
+  if (m && y < m.y) y = payload.y - 4 * sf;    // would poke above the screen (mac menu bar) → open downward
   if (m) {
     x = Math.min(Math.max(x, m.x), m.x + m.w - w);
     y = Math.min(Math.max(y, m.y), m.y + m.h - h);
