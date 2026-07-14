@@ -17,6 +17,9 @@ serde = "1"
 serde_json = "1"
 # macos-private-api gates the mac transparent-window support; it is a no-op on Windows.
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+# Cross-platform global hotkeys (jump-to-top / new-session) — the Carbon RegisterEventHotKey
+# analog from menubar.swift, rebindable from the options pane.
+tauri-plugin-global-shortcut = "2"
 
 [target.'cfg(windows)'.dependencies]
 # Same 0.61 the tauri tree already compiles; used for UI Automation (WT per-tab focus).

@@ -25,6 +25,7 @@ pub fn run() -> tauri::Result<()> {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             load_sessions,
             jump,
@@ -41,6 +42,7 @@ pub fn run() -> tauri::Result<()> {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             setup_tray(app.handle())?;
+            register_hotkeys(app.handle());
             if let Some(win) = app.get_webview_window("main") {
                 position_top_right(&win);
                 let _ = win.show();
@@ -112,6 +114,40 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         })
         .build(app)?;
     Ok(())
+}
+
+// ---- global hotkeys (the RegisterEventHotKey pair from menubar.swift, now cross-platform) ----
+
+/// (Re)register both global hotkeys from config. Called at startup and after the options pane
+/// saves. Unregisters everything first so a rebind doesn't leave the old combo live. A combo
+/// that fails to parse or is already taken by another app is logged and skipped — the widget
+/// still runs, that shortcut just stays unbound until it's rebound.
+fn register_hotkeys(app: &tauri::AppHandle) {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+
+    let jump = hotkey_jump();
+    if !jump.is_empty() {
+        if let Err(e) = gs.on_shortcut(jump.as_str(), |app, _sc, ev| {
+            if ev.state() == ShortcutState::Pressed {
+                jump_to_top(app);
+            }
+        }) {
+            eprintln!("claude-sessions: could not bind jump hotkey {jump:?}: {e}");
+        }
+    }
+
+    let new = hotkey_new();
+    if !new.is_empty() {
+        if let Err(e) = gs.on_shortcut(new.as_str(), |_app, _sc, ev| {
+            if ev.state() == ShortcutState::Pressed {
+                spawn_new_session();
+            }
+        }) {
+            eprintln!("claude-sessions: could not bind new-session hotkey {new:?}: {e}");
+        }
+    }
 }
 
 /// Jump to the first unmuted session — model::load() already sorts needs > your-turn > working,
@@ -271,6 +307,12 @@ fn close_session(id: String) {
 
 #[tauri::command]
 fn new_session() {
+    spawn_new_session();
+}
+
+/// Open a new Claude session in the configured terminal. Shared by the `+` button command and
+/// the new-session global hotkey.
+fn spawn_new_session() {
     let (target, cmds) = (new_session_terminal(), new_session_cmds());
     std::thread::spawn(move || terminals::new_session(&target, &cmds));
 }
@@ -288,6 +330,19 @@ fn config_str(key: &str, default: &str) -> String {
 
 fn new_session_cmd_raw() -> String {
     config_str("new_session_cmd", "claude")
+}
+
+// Global-hotkey defaults mirror menubar.swift's ⌃⌥⌘J / ⌃⌥⌘N — CmdOrCtrl maps to ⌘ on mac and
+// Ctrl on Windows/Linux. Accelerator strings are what tauri-plugin-global-shortcut parses.
+const DEFAULT_HOTKEY_JUMP: &str = "CmdOrCtrl+Alt+J";
+const DEFAULT_HOTKEY_NEW: &str = "CmdOrCtrl+Alt+N";
+
+fn hotkey_jump() -> String {
+    config_str("hotkey_jump", DEFAULT_HOTKEY_JUMP)
+}
+
+fn hotkey_new() -> String {
+    config_str("hotkey_new", DEFAULT_HOTKEY_NEW)
 }
 
 /// Which terminal `+` opens new sessions in; defaults to the platform's first adapter.
@@ -315,12 +370,20 @@ fn get_config() -> Value {
     json!({
         "new_session_cmd": new_session_cmd_raw(),
         "new_session_terminal": new_session_terminal(),
+        "hotkey_jump": hotkey_jump(),
+        "hotkey_new": hotkey_new(),
         "terminals": targets,
     })
 }
 
 #[tauri::command]
-fn set_config(new_session_cmd: String, new_session_terminal: String) {
+fn set_config(
+    app: tauri::AppHandle,
+    new_session_cmd: String,
+    new_session_terminal: String,
+    hotkey_jump: String,
+    hotkey_new: String,
+) {
     let path = crate::paths::config_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -331,7 +394,11 @@ fn set_config(new_session_cmd: String, new_session_terminal: String) {
     }
     root["new_session_cmd"] = json!(new_session_cmd.trim());
     root["new_session_terminal"] = json!(new_session_terminal.trim());
+    root["hotkey_jump"] = json!(hotkey_jump.trim());
+    root["hotkey_new"] = json!(hotkey_new.trim());
     let _ = std::fs::write(&path, serde_json::to_string_pretty(&root).unwrap_or_default());
+    // Apply the new bindings immediately.
+    register_hotkeys(&app);
 }
 
 #[tauri::command]

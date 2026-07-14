@@ -12,8 +12,8 @@ use std::collections::HashSet;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
-    VK_CONTROL, VK_RETURN, VK_SHIFT,
+    GetAsyncKeyState, SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+    KEYEVENTF_UNICODE, VK_CONTROL, VK_LWIN, VK_MENU, VK_RETURN, VK_RWIN, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
@@ -64,6 +64,12 @@ impl Terminal for Wt {
     }
 
     fn new_session(&self, cmds: &[String]) -> bool {
+        // When fired by the global hotkey (Ctrl+Alt+N), its modifiers are still physically
+        // held as we start. A synthetic Ctrl+Shift+T on top of a held Alt becomes
+        // Ctrl+Alt+Shift+T (not WT's new-tab chord) — no tab opens and the commands land in
+        // the current one. Wait for the user to let go first. Mouse-triggered calls (the +
+        // button) hold nothing, so this returns at once.
+        wait_for_modifiers_release();
         let mut h = wt_window();
         if h.is_null() {
             // No terminal open — start one, then find its window.
@@ -112,6 +118,23 @@ fn wt_window() -> HWND {
 }
 
 // ---- synthetic keyboard input ----
+
+/// Block until Ctrl/Alt/Shift/Win are all physically released (or ~1s elapses). Lets a global
+/// hotkey's own modifiers clear before we synthesize chords/typing, so the injected input
+/// isn't corrupted by keys the user is still holding.
+fn wait_for_modifiers_release() {
+    let any_held = || {
+        [VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN]
+            .iter()
+            .any(|&vk| (unsafe { GetAsyncKeyState(vk as i32) } as u16 & 0x8000) != 0)
+    };
+    for _ in 0..100 {
+        if !any_held() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 
 fn key_input(vk: u16, scan: u16, flags: u32) -> INPUT {
     let mut input: INPUT = unsafe { std::mem::zeroed() };

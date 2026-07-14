@@ -92,6 +92,24 @@
   #settings textarea:focus { border-color:rgba(255,255,255,.35); }
   #settings .hint { font-size:10px; color:#98989E; margin-top:5px; line-height:1.5; }
   #settings .hint code { color:#ECECEC; font-family:Consolas, monospace; }
+  #settings .hint kbd {
+    font:10px Consolas, monospace; color:#ECECEC; background:rgba(255,255,255,.1);
+    border:1px solid rgba(255,255,255,.18); border-radius:3px; padding:0 3px;
+  }
+  #settings .hkrow {
+    display:flex; align-items:center; justify-content:space-between;
+    gap:8px; margin-top:6px; font-size:11.5px; color:#ECECEC;
+  }
+  #settings .shortcut {
+    min-width:96px; text-align:center; padding:4px 8px; cursor:pointer;
+    font:11.5px Consolas, monospace; color:#ECECEC;
+    background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.18);
+    border-radius:6px; outline:none; user-select:none; -webkit-user-select:none;
+  }
+  #settings .shortcut:hover { background:rgba(255,255,255,.1); }
+  #settings .shortcut.recording {
+    color:#98989E; border-color:rgba(52,199,89,.7); background:rgba(52,199,89,.1);
+  }
   #settings .btnrow { display:flex; gap:8px; margin-top:9px; }
   #settings button {
     flex:1; padding:5px 0; font:11.5px inherit; color:#ECECEC; cursor:pointer;
@@ -134,6 +152,16 @@
     <label for="cmd">New-session command</label>
     <textarea id="cmd" rows="3" spellcheck="false"></textarea>
     <div class="hint">Typed into the new terminal tab, one line per command — so your shell aliases work (e.g. <code>prog</code> then <code>c</code>).</div>
+    <label>Global shortcuts</label>
+    <div class="hkrow">
+      <span>Jump to top session</span>
+      <div class="shortcut" id="hk-jump" tabindex="0" title="Click, then press a shortcut"></div>
+    </div>
+    <div class="hkrow">
+      <span>New session</span>
+      <div class="shortcut" id="hk-new" tabindex="0" title="Click, then press a shortcut"></div>
+    </div>
+    <div class="hint">Work from anywhere, even when the widget is hidden. Needs at least one modifier (Ctrl/Alt/Shift/⊞). <kbd>Esc</kbd> cancels.</div>
     <div class="btnrow">
       <button id="save">Save</button>
       <button id="cancel">Cancel</button>
@@ -166,6 +194,8 @@ let sessions = [];
 let renaming = null;   // session id currently being renamed inline
 let settingsOpen = false;
 let lastH = 0;
+let hkJump = "";       // global-hotkey accelerators (loaded from config, edited in the options pane)
+let hkNew = "";
 
 
 function ageStr(ts) {
@@ -319,6 +349,10 @@ document.getElementById("gear").addEventListener("click", () => {
       sel.appendChild(o);
     }
     sel.value = c.new_session_terminal;
+    hkJump = c.hotkey_jump || "";
+    hkNew = c.hotkey_new || "";
+    document.getElementById("hk-jump").textContent = fmtAccel(hkJump);
+    document.getElementById("hk-new").textContent = fmtAccel(hkNew);
     setSettingsOpen(true);
   });
 });
@@ -326,9 +360,66 @@ document.getElementById("save").addEventListener("click", () => {
   invoke("set_config", {
     newSessionCmd: document.getElementById("cmd").value,
     newSessionTerminal: document.getElementById("term").value,
+    hotkeyJump: hkJump,
+    hotkeyNew: hkNew,
   }).then(() => setSettingsOpen(false));
 });
 document.getElementById("cancel").addEventListener("click", () => setSettingsOpen(false));
+
+// ---- global-shortcut recorder (the ShortcutField analog from menubar.swift) ----
+const IS_MAC = navigator.platform.toUpperCase().includes("MAC");
+const MOD_CODES = ["ControlLeft","ControlRight","AltLeft","AltRight","ShiftLeft","ShiftRight","MetaLeft","MetaRight"];
+const MOD_KEYS = ["Control","Alt","AltGraph","Shift","Meta","OS","CapsLock","NumLock","ScrollLock","Dead"];
+function codeLabel(code) {
+  if (code.startsWith("Key")) return code.slice(3);
+  if (code.startsWith("Digit")) return code.slice(5);
+  if (code.startsWith("Numpad")) return "Num" + code.slice(6);
+  const map = { Backquote:"`", Minus:"-", Equal:"=", BracketLeft:"[", BracketRight:"]",
+    Backslash:"\\", Semicolon:";", Quote:"'", Comma:",", Period:".", Slash:"/", Space:"Space" };
+  return map[code] || code;
+}
+function modLabel(m) {
+  const mac = { Control:"⌃", Alt:"⌥", Shift:"⇧", Super:"⌘", CmdOrCtrl:"⌘", CommandOrControl:"⌘" };
+  const win = { Control:"Ctrl", Alt:"Alt", Shift:"Shift", Super:"⊞", CmdOrCtrl:"Ctrl", CommandOrControl:"Ctrl" };
+  return (IS_MAC ? mac : win)[m] || m;
+}
+function fmtAccel(accel) {
+  if (!accel) return "—";
+  const parts = accel.split("+");
+  const key = parts.pop();
+  const sep = IS_MAC ? "" : "+";
+  return [...parts.map(modLabel), codeLabel(key)].join(sep);
+}
+function bindShortcut(el, get, set) {
+  let recording = false;
+  const stop = () => { recording = false; el.classList.remove("recording"); el.textContent = fmtAccel(get()); };
+  el.addEventListener("click", () => {
+    recording = true; el.classList.add("recording"); el.textContent = "Press keys…"; el.focus();
+  });
+  el.addEventListener("blur", () => { if (recording) stop(); });
+  el.addEventListener("keydown", e => {
+    if (!recording) return;
+    e.preventDefault(); e.stopPropagation();
+    if (e.key === "Escape") { stop(); return; }
+    // Wait through lone modifier/lock presses — guard on both key and code since injected or
+    // exotic events can report an empty e.code.
+    if (MOD_KEYS.includes(e.key) || MOD_CODES.includes(e.code)) return;
+    const mods = [];
+    if (e.ctrlKey) mods.push("Control");
+    if (e.altKey) mods.push("Alt");
+    if (e.shiftKey) mods.push("Shift");
+    if (e.metaKey) mods.push("Super");
+    if (!mods.length) return;                          // require at least one modifier
+    // Prefer the physical code (layout-independent); fall back to the key char if it's missing.
+    let token = e.code;
+    if (!token || token === "Unidentified") token = e.key.length === 1 ? e.key.toUpperCase() : "";
+    if (!token) return;                                // couldn't identify the key — keep waiting
+    set([...mods, token].join("+"));
+    stop();
+  });
+}
+bindShortcut(document.getElementById("hk-jump"), () => hkJump, v => hkJump = v);
+bindShortcut(document.getElementById("hk-new"),  () => hkNew,  v => hkNew  = v);
 
 listen("sessions", e => { sessions = e.payload; render(); });
 setInterval(() => {                                   // tick ages between pushes
