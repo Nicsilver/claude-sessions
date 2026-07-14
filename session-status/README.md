@@ -6,19 +6,16 @@ screenshots, and how to install it.
 
 ## Layout
 
-- **`app/`** — the product: one cross-platform Rust + [Tauri](https://tauri.app) binary that is
-  the GUI widget, the tray icon, the hook **recorder** (`claude-sessions record <state>`) and the
-  hook **installer** (`claude-sessions install` / `uninstall`) all in one. All visuals are plain
-  HTML/CSS in `app/ui/`.
-- **`bin/`**, **`win/`**, **`recorder/`** — the earlier native implementations (the macOS Swift
-  menu-bar + floating dashboard, the WPF Windows widget, and a standalone Rust recorder), kept for
-  reference only. The `app/` binary supersedes them all.
+Everything lives in **`app/`** — one cross-platform Rust + [Tauri](https://tauri.app) binary that
+is the GUI widget, the tray icon, the hook **recorder** (`claude-sessions record <state>`) and the
+hook **installer** (`claude-sessions install` / `uninstall`) all in one. All visuals are plain
+HTML/CSS in `app/ui/`.
 
 ## How it works
 
 Claude Code hooks (`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Notification`, `Stop`,
 `SessionEnd`) call `claude-sessions record <state>`, which writes one small JSON file per session
-under `~/.claude/session-status/state/`. Every surface just reads that directory — no daemon, no
+under `~/.claude/session-status/state/`. The widget just reads that directory — no daemon, no
 IPC; dead sessions are pruned by liveness-checking their PIDs.
 
 State → colour: `needs` (red — a prompt/permission), `yourturn` (yellow — waiting on you),

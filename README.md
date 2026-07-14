@@ -67,8 +67,6 @@ Click the **⚙ gear** for options: which terminal new sessions open in and the 
 
 - **`session-status/app`** — the cross-platform Rust app (widget + tray + hook recorder + installer). All visuals are plain HTML/CSS in `ui/`.
 - **`src/`** (repo root, Gradle) — the **IntelliJ plugin**: a tool window with the same session list, plus focus/close handling for sessions running in JetBrains terminals.
-- **`session-status/bin`** — the original native macOS surfaces (`menubar.swift`, `floatdash.swift`) and the Python hook recorder, kept for reference.
-- **`session-status/win`** — the previous native Windows widget (WPF), superseded by the Rust app.
 
 ## How it works
 
