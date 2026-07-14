@@ -18,8 +18,16 @@ dependencies {
     // Platform provides gson at runtime; compileOnly just satisfies the compiler.
     compileOnly("com.google.code.gson:gson:2.11.0")
     intellijPlatform {
-        // Build against the installed IDE (no multi-GB SDK download).
-        local("/Users/nije/Applications/IntelliJ IDEA.app")
+        // Locally, build against the installed IDE (no multi-GB SDK download). On CI (or any
+        // machine without that install) fall back to downloading the Community SDK, which Gradle
+        // caches. Override the local path with -PlocalIde=/path/to/IDE if yours differs.
+        val localIde = file(providers.gradleProperty("localIde")
+            .getOrElse("/Users/nije/Applications/IntelliJ IDEA.app"))
+        if (localIde.exists()) {
+            local(localIde)
+        } else {
+            intellijIdeaCommunity("2026.1")
+        }
         bundledPlugin("org.jetbrains.plugins.terminal")
     }
 }

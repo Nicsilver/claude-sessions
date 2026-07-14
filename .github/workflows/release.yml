@@ -1,0 +1,144 @@
+name: Release
+
+# Push a version tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) to build all three
+# artifacts and publish a GitHub Release. `workflow_dispatch` builds them without releasing —
+# handy for a dry run (download the artifacts from the run's summary page).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ---- Windows: self-contained single-file .exe (no .NET runtime needed) ----
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - name: Publish single-file exe
+        shell: pwsh
+        run: >
+          dotnet publish session-status/win/ClaudeSessions/ClaudeSessions.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true -p:DebugType=none
+          -o publish/win
+      - name: Stage package
+        shell: pwsh
+        run: |
+          $stage = "pkg/ClaudeSessions-win-x64"
+          New-Item -ItemType Directory -Force -Path "$stage/bin","$stage/win" | Out-Null
+          Copy-Item publish/win/ClaudeSessions.exe "$stage/"
+          Copy-Item session-status/bin/record.py    "$stage/bin/"
+          Copy-Item session-status/win/install.py   "$stage/win/"
+          @"
+          Claude Sessions - Windows
+
+          1. Put this folder somewhere permanent (e.g. your home directory).
+          2. Double-click ClaudeSessions.exe to start the widget (it lives in the system tray).
+          3. Wire the Claude Code hooks so the widget gets data:
+                 python win\install.py install
+             (undo later with:  python win\install.py uninstall)
+          4. Start at login (optional):
+                 ClaudeSessions.exe --register-startup
+             (turn off with:  ClaudeSessions.exe --unregister-startup)
+
+          Notes
+          - The exe is self-contained; no .NET install is required.
+          - This is an unsigned build: Windows SmartScreen may warn once.
+            Click "More info" > "Run anyway".
+          "@ | Set-Content -Encoding utf8 "$stage/INSTALL.txt"
+          Compress-Archive -Path "$stage/*" -DestinationPath "ClaudeSessions-win-x64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: ClaudeSessions-win-x64.zip
+
+  # ---- macOS: build the .app bundle + floatdash, wrap in a .dmg ----
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build app + floatdash
+        working-directory: session-status/bin
+        run: |
+          set -euo pipefail
+          swiftc -O floatdash.swift -o floatdash
+          APP=ClaudeSessions.app
+          rm -rf "$APP" && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp menubar-Info.plist "$APP/Contents/Info.plist"
+          cp AppIcon.icns       "$APP/Contents/Resources/AppIcon.icns"
+          swiftc -O menubar.swift -o "$APP/Contents/MacOS/ClaudeSessions"
+          codesign -s - --force "$APP"   # ad-hoc (unsigned) — Gatekeeper needs a one-time override
+      - name: Make DMG
+        working-directory: session-status/bin
+        run: |
+          set -euo pipefail
+          STAGE=dmg
+          rm -rf "$STAGE" && mkdir -p "$STAGE/Extras"
+          cp -R ClaudeSessions.app "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          cp floatdash record.py "$STAGE/Extras/"
+          cat > "$STAGE/INSTALL.txt" <<'EOF'
+          Claude Sessions - macOS
+
+          1. Drag ClaudeSessions.app to Applications.
+          2. First launch: right-click the app > Open (unsigned build; approve the
+             Gatekeeper prompt once).
+          3. Wire the Claude Code hooks: point them at Extras/record.py -- see the repo
+             README section "Wiring the hooks".
+          4. Start at login (optional): open a terminal and run
+                 /Applications/ClaudeSessions.app/Contents/MacOS/ClaudeSessions register
+             (undo with: ... ClaudeSessions unregister)
+
+          Extras/
+            floatdash  - optional always-on-top dashboard
+            record.py  - the hook recorder (point your Claude Code hooks at this)
+          EOF
+          hdiutil create -volname "Claude Sessions" -srcfolder "$STAGE" \
+            -ov -format UDZO "$GITHUB_WORKSPACE/ClaudeSessions-macos.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: ClaudeSessions-macos.dmg
+
+  # ---- IntelliJ plugin: gradle buildPlugin -> distributable .zip ----
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Build plugin
+        run: ./gradlew buildPlugin --no-daemon --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin
+          path: build/distributions/*.zip
+
+  # ---- Publish: gather the three artifacts and attach them to a Release ----
+  release:
+    needs: [windows, macos, plugin]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            dist/windows/* dist/macos/* dist/plugin/*

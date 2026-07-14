@@ -61,7 +61,17 @@ switch ($Command) {
         if (Test-Path $state) { Remove-Item $state -Recurse -Force; "state cleared" }
         "done. Restart your Claude sessions to fully detach."
     }
+    "autostart" {
+        if (-not (Test-Path $Exe)) { "building first..."; & (Find-Dotnet) build -c Release $Proj }
+        & $Exe --register-startup
+        if (-not (Get-Process ClaudeSessions -ErrorAction SilentlyContinue)) { Start-Process $Exe }
+        "registered to start at login (Task Manager > Startup shows it). Disable: status.ps1 autostart-off"
+    }
+    "autostart-off" {
+        if (Test-Path $Exe) { & $Exe --unregister-startup }
+        "login item removed (the widget keeps running until you close it)"
+    }
     default {
-        "usage: status.ps1 {build|float|float-stop|install|uninstall}"
+        "usage: status.ps1 {build|float|float-stop|install|uninstall|autostart|autostart-off}"
     }
 }

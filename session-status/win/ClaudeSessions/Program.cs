@@ -21,6 +21,9 @@ public static class Program
             Interop.NewClaudeSessionSync();
             return;
         }
+        // Launch-at-login toggle (the Windows analog of the mac SMAppService login item).
+        if (args.Length >= 1 && args[0] == "--register-startup")   { Startup.Register();   return; }
+        if (args.Length >= 1 && args[0] == "--unregister-startup") { Startup.Unregister(); return; }
 
         // Single instance: a second launch just exits, so `status float` is idempotent.
         using var mutex = new Mutex(true, "ClaudeSessionsFloatingWidget", out bool isNew);
