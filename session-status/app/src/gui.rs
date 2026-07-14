@@ -36,6 +36,11 @@ struct App {
     visible: bool,
     quitting: bool,
     positioned: bool,
+    marker_offer: bool, // show the one-time "add ⏳/✅ to CLAUDE.md?" banner
+}
+
+fn marker_dismiss_flag() -> std::path::PathBuf {
+    crate::paths::base().join(".marker-offer-dismissed")
 }
 
 impl App {
@@ -53,6 +58,9 @@ impl App {
                 ctx.request_repaint();
             });
         }
+        // Offer the ⏳/✅ turn-marker tip once, unless it's already in CLAUDE.md or was dismissed.
+        let marker_offer = !marker_dismiss_flag().exists() && !install::claude_md_has_markers();
+
         let mut app = App {
             sessions: Vec::new(),
             last_refresh: Instant::now() - Duration::from_secs(10),
@@ -60,9 +68,48 @@ impl App {
             visible: true,
             quitting: false,
             positioned: false,
+            marker_offer,
         };
         app.refresh();
         app
+    }
+
+    fn dismiss_marker_offer(&mut self) {
+        self.marker_offer = false;
+        if let Some(dir) = marker_dismiss_flag().parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(marker_dismiss_flag(), "1");
+    }
+
+    /// One-time banner offering to add the turn-marker instruction to CLAUDE.md.
+    fn marker_banner(&mut self, ui: &mut egui::Ui, full: f32) {
+        let frame = egui::Frame::none()
+            .fill(Color32::from_rgb(0x2A, 0x2A, 0x2E))
+            .rounding(Rounding::same(8.0))
+            .inner_margin(egui::Margin::symmetric(10.0, 8.0));
+        egui::Frame::none()
+            .inner_margin(egui::Margin::symmetric(8.0, 2.0))
+            .show(ui, |ui| {
+                ui.set_width(full - 16.0);
+                frame.show(ui, |ui| {
+                    ui.label(egui::RichText::new("Add turn markers to CLAUDE.md?")
+                        .size(12.0).color(styles::LABEL));
+                    ui.label(egui::RichText::new("Lets Claude flag done vs your-turn accurately.")
+                        .size(10.5).color(styles::SECONDARY));
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Add").clicked() {
+                            install::append_claude_md_markers();
+                            self.dismiss_marker_offer();
+                        }
+                        if ui.button("Dismiss").clicked() {
+                            self.dismiss_marker_offer();
+                        }
+                    });
+                });
+            });
+        ui.add_space(2.0);
     }
 
     fn refresh(&mut self) {
@@ -149,6 +196,10 @@ impl eframe::App for App {
             let full = ui.available_width();
             self.header(ui, ctx, full);
             ui.add_space(2.0);
+
+            if self.marker_offer {
+                self.marker_banner(ui, full);
+            }
 
             egui::ScrollArea::vertical()
                 .max_height(H - 96.0)

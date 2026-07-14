@@ -24,6 +24,8 @@ fn main() {
         }
         Some("install") => std::process::exit(install::run(true)),
         Some("uninstall") => std::process::exit(install::run(false)),
+        // Append the optional ⏳/✅ turn-marker instruction to the global CLAUDE.md.
+        Some("markers") => std::process::exit(if install::append_claude_md_markers() { 0 } else { 1 }),
         // Default (double-click): launch the floating dashboard + tray.
         _ => {
             if let Err(e) = gui::run() {

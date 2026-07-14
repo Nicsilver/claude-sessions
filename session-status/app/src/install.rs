@@ -126,14 +126,50 @@ fn backup(path: &Path) {
     if !path.exists() {
         return;
     }
-    let dst = path.with_file_name(format!(
-        "{}.bak-{}",
-        path.file_name().and_then(|s| s.to_str()).unwrap_or("settings.json"),
-        unix_now() as u64
-    ));
+    let orig = path.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+    let dst = path.with_file_name(format!("{orig}.bak-{}", unix_now() as u64));
     if std::fs::copy(path, &dst).is_ok() {
         if let Some(name) = dst.file_name().and_then(|s| s.to_str()) {
-            println!("backed up settings.json -> {name}");
+            println!("backed up {orig} -> {name}");
         }
     }
+}
+
+// ---- optional: the ⏳/✅ turn-marker instruction in the global CLAUDE.md ----
+
+const MARKER_SENTINEL: &str = "claude-sessions: turn markers";
+const MARKER_SNIPPET: &str = "\n\n<!-- claude-sessions: turn markers -->\n\
+At the end of every response, put a status marker on its own final line:\n\
+- `✅` when the task is complete and you need nothing from me.\n\
+- `⏳` when you are waiting on me (a question, a decision, or confirmation).\n";
+
+fn claude_md_path() -> std::path::PathBuf {
+    home().join(".claude").join("CLAUDE.md")
+}
+
+/// True if the global CLAUDE.md already carries a turn-marker instruction (so we don't offer again).
+pub fn claude_md_has_markers() -> bool {
+    std::fs::read_to_string(claude_md_path())
+        .map(|s| s.contains(MARKER_SENTINEL) || (s.contains('⏳') && s.contains('✅')))
+        .unwrap_or(false)
+}
+
+/// Append the turn-marker instruction to ~/.claude/CLAUDE.md (idempotent; backs up first if the
+/// file exists). Returns true on success / already-present.
+pub fn append_claude_md_markers() -> bool {
+    let path = claude_md_path();
+    if claude_md_has_markers() {
+        return true;
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    backup(&path);
+    let mut content = std::fs::read_to_string(&path).unwrap_or_default();
+    content.push_str(MARKER_SNIPPET);
+    let ok = std::fs::write(&path, content).is_ok();
+    if ok {
+        println!("added turn-marker instruction to {}", path.display());
+    }
+    ok
 }
