@@ -55,6 +55,7 @@ jobs:
           "@ | Set-Content -Encoding utf8 "$stage/INSTALL.txt"
           Compress-Archive -Path "$stage/*" -DestinationPath "ClaudeSessions-win-x64.zip"
       - uses: actions/upload-artifact@v4
+        id: upload-windows   # referenced by the SignPath signing step — see docs/signing.md
         with:
           name: windows
           path: ClaudeSessions-win-x64.zip
