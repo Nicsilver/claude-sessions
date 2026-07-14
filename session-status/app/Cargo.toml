@@ -23,6 +23,10 @@ tauri-plugin-global-shortcut = "2"
 # Launch-at-login — HKCU Run on Windows (Startup.cs analog), login item on macOS (SMAppService
 # analog). One plugin for both, toggled from the options pane.
 tauri-plugin-autostart = "2"
+# The crate tauri-plugin-autostart wraps; used directly by `install-app`/`uninstall-app` to
+# register autostart at an explicit (installed) path from the headless CLI, with the same app
+# name the plugin uses so the GUI toggle and the CLI manage one entry.
+auto-launch = "0.5"
 
 [target.'cfg(windows)'.dependencies]
 # Same 0.61 the tauri tree already compiles; used for UI Automation (WT per-tab focus).

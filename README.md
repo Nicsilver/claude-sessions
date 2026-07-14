@@ -23,12 +23,14 @@ The tray/menu-bar icon shows the top-priority state so you know something needs 
 
 One binary — GUI, hook recorder and installer in one (~5 MB, Rust + [Tauri](https://tauri.app), using the OS webview).
 
-1. Grab `ClaudeSessions-win-x64.zip` or `ClaudeSessions-macos-arm64.zip` from the [latest release](https://github.com/Nicsilver/claude-sessions/releases) and put the binary somewhere permanent, **or** build it yourself:
+1. Grab `ClaudeSessions-win-x64.zip` or `ClaudeSessions-macos-arm64.zip` from the [latest release](https://github.com/Nicsilver/claude-sessions/releases), **or** build it yourself:
    ```
    cd session-status/app && cargo build --release
    ```
 2. Run it. First launch wires the Claude Code hooks into `~/.claude/settings.json` automatically (non-destructive — your existing hooks are untouched; `claude-sessions uninstall` removes only ours).
 3. Start a **new** Claude Code session and watch it appear.
+
+To make it permanent, run `claude-sessions install-app` once: it copies the binary to a stable per-user location (`%LOCALAPPDATA%\ClaudeSessions` / `~/Library/Application Support/ClaudeSessions`), turns on launch-at-login, and relaunches from there. `claude-sessions uninstall-app` reverses it. (Or just tick **Start at login** in the ⚙ options — but running from the download/build folder means moving that folder breaks startup.)
 
 Optionally, `claude-sessions markers` (or the tray menu) adds a small instruction to your global `CLAUDE.md` that makes Claude end each reply with ✅/⏳, which sharpens the *done* vs *your turn* distinction.
 

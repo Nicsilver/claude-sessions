@@ -10,6 +10,7 @@ mod model;
 mod paths;
 mod platform;
 mod recorder;
+mod selfinstall;
 mod styles;
 mod terminals;
 
@@ -31,6 +32,16 @@ fn main() {
         Some("uninstall") => {
             platform::attach_parent_console();
             std::process::exit(install::run(false))
+        }
+        // Copy the binary to a permanent location and register launch-at-login there, so
+        // autostart survives moving/cleaning the build tree. `uninstall-app` reverses it.
+        Some("install-app") => {
+            platform::attach_parent_console();
+            std::process::exit(selfinstall::install_app())
+        }
+        Some("uninstall-app") => {
+            platform::attach_parent_console();
+            std::process::exit(selfinstall::uninstall_app())
         }
         // Diagnostic: jump to a session (id prefix match) exactly like clicking its row.
         Some("focus") => {

@@ -22,6 +22,33 @@ pub fn config_path() -> PathBuf { base().join("config.json") }
 pub fn sessions_dir() -> PathBuf { home().join(".claude").join("sessions") }
 pub fn settings_path() -> PathBuf { home().join(".claude").join("settings.json") }
 
+/// Permanent per-user home for `install-app` to copy the binary to, so launch-at-login points at
+/// a stable path (not a build tree). Windows: %LOCALAPPDATA%\ClaudeSessions; macOS: Application
+/// Support; Linux: ~/.local/share.
+pub fn install_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        let base = std::env::var("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| home().join("AppData").join("Local"));
+        base.join("ClaudeSessions")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        home().join("Library").join("Application Support").join("ClaudeSessions")
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        home().join(".local").join("share").join("claude-sessions")
+    }
+}
+
+/// The installed binary path (platform-correct filename).
+pub fn installed_exe() -> PathBuf {
+    let name = if cfg!(windows) { "claude-sessions.exe" } else { "claude-sessions" };
+    install_dir().join(name)
+}
+
 pub fn unix_now() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
