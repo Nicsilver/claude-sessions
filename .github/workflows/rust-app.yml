@@ -1,0 +1,39 @@
+name: Rust app (rust-rewrite)
+
+# Builds the cross-platform Rust rewrite (session-status/app) for Windows and macOS and uploads
+# the binaries as run artifacts, so the single-binary app can be tested on both OSes. Not a
+# release workflow — that's release.yml. Runs on the rust-rewrite branch and on demand.
+on:
+  push:
+    branches: [rust-rewrite]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bin: claude-sessions.exe
+            asset: claude-sessions-win-x64
+          - os: macos-latest
+            bin: claude-sessions
+            asset: claude-sessions-macos-arm64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: session-status/app
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cargo build (release)
+        run: cargo build --release
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p out
+          cp "target/release/${{ matrix.bin }}" "out/${{ matrix.bin }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: session-status/app/out/${{ matrix.bin }}
