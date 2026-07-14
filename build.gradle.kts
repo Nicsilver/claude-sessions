@@ -26,7 +26,9 @@ dependencies {
         if (localIde.exists()) {
             local(localIde)
         } else {
-            intellijIdeaCommunity("2026.1")
+            // Bare "2026.1" has a metadata entry but no downloadable artifact; the GA download is
+            // the patch release. 2026.1.4 is build 261.x, within the sinceBuild/untilBuild range.
+            intellijIdeaCommunity("2026.1.4")
         }
         bundledPlugin("org.jetbrains.plugins.terminal")
     }
