@@ -27,9 +27,20 @@ mod imp {
     };
 
     const JETBRAINS_EXES: &[&str] = &[
-        "idea64.exe", "idea.exe", "pycharm64.exe", "pycharm.exe", "webstorm64.exe",
-        "clion64.exe", "goland64.exe", "phpstorm64.exe", "rider64.exe", "rubymine64.exe",
-        "datagrip64.exe", "rustrover64.exe", "aqua64.exe", "fleet.exe",
+        "idea64.exe",
+        "idea.exe",
+        "pycharm64.exe",
+        "pycharm.exe",
+        "webstorm64.exe",
+        "clion64.exe",
+        "goland64.exe",
+        "phpstorm64.exe",
+        "rider64.exe",
+        "rubymine64.exe",
+        "datagrip64.exe",
+        "rustrover64.exe",
+        "aqua64.exe",
+        "fleet.exe",
     ];
 
     /// pid → (parent pid, lowercase exe name), from a Toolhelp snapshot. Shared with the
@@ -89,7 +100,9 @@ mod imp {
             if seen.contains(&pid) {
                 break;
             }
-            let Some((ppid, name)) = pmap.get(&pid) else { break };
+            let Some((ppid, name)) = pmap.get(&pid) else {
+                break;
+            };
             seen.insert(pid);
             chain.push((pid, name.clone()));
             pid = *ppid;
@@ -114,7 +127,10 @@ mod imp {
                 return ("console".into(), *p);
             }
         }
-        ("other".into(), chain.first().map(|(p, _)| *p).unwrap_or(start))
+        (
+            "other".into(),
+            chain.first().map(|(p, _)| *p).unwrap_or(start),
+        )
     }
 
     fn console_title() -> String {
@@ -188,7 +204,12 @@ mod imp {
         if GetWindowTextLengthW(h) == 0 {
             return 1; // untitled shell
         }
-        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        let mut r = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
         GetWindowRect(h, &mut r);
         let area = (r.right - r.left).max(0) as i64 * (r.bottom - r.top).max(0) as i64;
         if area > ctx.best_area {
@@ -199,7 +220,11 @@ mod imp {
     }
 
     pub fn main_window_for_pid(pid: i64) -> HWND {
-        let mut ctx = Find { pid: pid as u32, best: std::ptr::null_mut(), best_area: -1 };
+        let mut ctx = Find {
+            pid: pid as u32,
+            best: std::ptr::null_mut(),
+            best_area: -1,
+        };
         unsafe {
             EnumWindows(Some(enum_proc), &mut ctx as *mut _ as LPARAM);
         }
@@ -235,7 +260,6 @@ mod imp {
             AttachConsole(ATTACH_PARENT_PROCESS);
         }
     }
-
 }
 
 // ============================ Unix (macOS) ============================
@@ -248,8 +272,20 @@ mod imp {
     /// lowercased basename of each ancestor's comm. The id "jetbrains" is the contract with
     /// terminals/jetbrains.rs (and the IntelliJ plugin behind it).
     const JETBRAINS_APPS: &[&str] = &[
-        "idea", "intellij", "jetbrains", "pycharm", "webstorm", "clion", "goland",
-        "phpstorm", "rider", "rubymine", "datagrip", "rustrover", "aqua", "fleet",
+        "idea",
+        "intellij",
+        "jetbrains",
+        "pycharm",
+        "webstorm",
+        "clion",
+        "goland",
+        "phpstorm",
+        "rider",
+        "rubymine",
+        "datagrip",
+        "rustrover",
+        "aqua",
+        "fleet",
     ];
 
     pub fn parent_pid(_pid: i64) -> i64 {
@@ -260,15 +296,21 @@ mod imp {
     /// path containing spaces ("…/IntelliJ IDEA.app/…/idea"), so split only twice.
     fn process_map() -> HashMap<i64, (i64, String)> {
         let mut map = HashMap::new();
-        let Ok(o) = std::process::Command::new("ps").args(["-axo", "pid=,ppid=,comm="]).output()
+        let Ok(o) = std::process::Command::new("ps")
+            .args(["-axo", "pid=,ppid=,comm="])
+            .output()
         else {
             return map;
         };
         for line in String::from_utf8_lossy(&o.stdout).lines() {
             let t = line.trim_start();
-            let Some((pid_s, rest)) = t.split_once(char::is_whitespace) else { continue };
+            let Some((pid_s, rest)) = t.split_once(char::is_whitespace) else {
+                continue;
+            };
             let rest = rest.trim_start();
-            let Some((ppid_s, comm)) = rest.split_once(char::is_whitespace) else { continue };
+            let Some((ppid_s, comm)) = rest.split_once(char::is_whitespace) else {
+                continue;
+            };
             let (Ok(pid), Ok(ppid)) = (pid_s.parse::<i64>(), ppid_s.parse::<i64>()) else {
                 continue;
             };
@@ -288,7 +330,9 @@ mod imp {
             if pid <= 1 || seen.contains(&pid) {
                 break;
             }
-            let Some((ppid, comm)) = pmap.get(&pid) else { break };
+            let Some((ppid, comm)) = pmap.get(&pid) else {
+                break;
+            };
             seen.insert(pid);
             let base = std::path::Path::new(comm)
                 .file_name()
@@ -312,7 +356,10 @@ mod imp {
                 return ("terminal".into(), *p);
             }
         }
-        ("other".into(), chain.first().map(|(p, _)| *p).unwrap_or(start))
+        (
+            "other".into(),
+            chain.first().map(|(p, _)| *p).unwrap_or(start),
+        )
     }
 
     pub fn is_alive(pid: i64) -> bool {
@@ -354,7 +401,9 @@ mod imp {
         if tty.is_empty() {
             return best;
         }
-        let Ok(entries) = std::fs::read_dir(crate::paths::tab_names_dir()) else { return best };
+        let Ok(entries) = std::fs::read_dir(crate::paths::tab_names_dir()) else {
+            return best;
+        };
         let now = crate::paths::unix_now();
         for e in entries.flatten() {
             let v = crate::paths::load_json(&e.path());
@@ -362,7 +411,8 @@ mod imp {
             let name = crate::paths::str_of(entry, "name").trim().to_string();
             let ts = crate::paths::f64_of(entry, "ts");
             let auto = entry.get("auto").and_then(Value::as_bool).unwrap_or(false);
-            if name.is_empty() || auto || is_default_tab(&name) || now - ts > 15.0 || ts <= best_ts {
+            if name.is_empty() || auto || is_default_tab(&name) || now - ts > 15.0 || ts <= best_ts
+            {
                 continue;
             }
             best = name;
@@ -384,10 +434,16 @@ mod imp {
         let tty = tty_of(pid);
         // No controlling tty = headless (the IDE plugin's background ACP agent, SDK
         // callers) — leave it untagged so the widget hides it, like the Swift surface did.
-        let (term, term_pid) =
-            if tty.is_empty() { (String::new(), 0) } else { unix_terminal(pid) };
-        let mut title =
-            if term == "jetbrains" { ide_tab_label(&tty) } else { String::new() };
+        let (term, term_pid) = if tty.is_empty() {
+            (String::new(), 0)
+        } else {
+            unix_terminal(pid)
+        };
+        let mut title = if term == "jetbrains" {
+            ide_tab_label(&tty)
+        } else {
+            String::new()
+        };
         if title.is_empty() {
             title = crate::recorder::transcript_title(transcript);
         }

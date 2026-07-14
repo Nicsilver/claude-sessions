@@ -71,7 +71,8 @@ pub fn already_installed() -> bool {
         groups.as_array().is_some_and(|arr| {
             arr.iter().any(|g| {
                 g.get("hooks").and_then(Value::as_array).is_some_and(|hs| {
-                    hs.iter().any(|h| str_of(h, "command").starts_with(&cmd_needle))
+                    hs.iter()
+                        .any(|h| str_of(h, "command").starts_with(&cmd_needle))
                 })
             })
         })
@@ -194,4 +195,42 @@ pub fn append_claude_md_markers() -> bool {
         println!("added turn-marker instruction to {}", path.display());
     }
     ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognises_our_recorder_commands() {
+        // The Python original, the old compiled `record`, and the current binary (quoted path).
+        assert!(is_recorder_cmd(
+            "/opt/homebrew/bin/python3 /x/session-status/bin/record.py working"
+        ));
+        assert!(is_recorder_cmd("/usr/local/bin/record done"));
+        assert!(is_recorder_cmd(
+            "\"C:\\Users\\me\\AppData\\Local\\ClaudeSessions\\claude-sessions.exe\" record needs"
+        ));
+    }
+
+    #[test]
+    fn leaves_unrelated_hooks_alone() {
+        // The whole point of matching the executable, not the string: never clobber a user's own
+        // hooks — this is the "awake" hook Nic actually has.
+        assert!(!is_recorder_cmd("caffeinate -di"));
+        assert!(!is_recorder_cmd("/usr/bin/keep-awake --loop"));
+        assert!(!is_recorder_cmd("node /home/me/notify.js"));
+        // A script that merely lives under a "claude-sessions" directory is not our recorder.
+        assert!(!is_recorder_cmd("python3 /home/claude-sessions/worklog.py"));
+    }
+
+    #[test]
+    fn is_ours_only_flags_groups_that_run_the_recorder() {
+        let ours = json!({ "hooks": [ { "type": "command", "command": "/bin/record working" } ] });
+        let awake = json!({ "hooks": [ { "type": "command", "command": "caffeinate -di" } ] });
+        let empty = json!({ "hooks": [] });
+        assert!(is_ours(&ours));
+        assert!(!is_ours(&awake));
+        assert!(!is_ours(&empty));
+    }
 }

@@ -78,7 +78,8 @@ fn position_top_right(win: &tauri::WebviewWindow) {
     let (Ok(Some(mon)), Ok(size)) = (win.current_monitor(), win.outer_size()) else {
         return;
     };
-    let x = mon.position().x + mon.size().width as i32 - size.width as i32
+    let x = mon.position().x + mon.size().width as i32
+        - size.width as i32
         - (6.0 * mon.scale_factor()) as i32;
     let y = mon.position().y + (26.0 * mon.scale_factor()) as i32;
     let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
@@ -107,7 +108,12 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .tooltip("Claude sessions")
         .icon(badge_icon("idle", 0))
         .on_tray_icon_event(|tray, ev| {
-            if let TrayIconEvent::Click { button, button_state: MouseButtonState::Up, position, .. } = ev
+            if let TrayIconEvent::Click {
+                button,
+                button_state: MouseButtonState::Up,
+                position,
+                ..
+            } = ev
             {
                 match button {
                     MouseButton::Left => jump_to_top(tray.app_handle()),
@@ -405,13 +411,20 @@ fn set_config(
     root["new_session_terminal"] = json!(new_session_terminal.trim());
     root["hotkey_jump"] = json!(hotkey_jump.trim());
     root["hotkey_new"] = json!(hotkey_new.trim());
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(&root).unwrap_or_default());
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&root).unwrap_or_default(),
+    );
     // Apply the new bindings immediately.
     register_hotkeys(&app);
     // Launch-at-login is OS state — only touch it when the toggle actually changed.
     let mgr = app.autolaunch();
     if autostart != mgr.is_enabled().unwrap_or(false) {
-        let _ = if autostart { mgr.enable() } else { mgr.disable() };
+        let _ = if autostart {
+            mgr.enable()
+        } else {
+            mgr.disable()
+        };
     }
 }
 

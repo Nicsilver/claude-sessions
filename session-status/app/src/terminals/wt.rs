@@ -5,10 +5,10 @@
 //! remoting, and typing runs in the user's own shell so profile aliases work). Ported from
 //! WtTabs.cs / Interop.cs.
 
+use super::tabmatch::{self, Target};
 use super::Terminal;
 use crate::model::Sess;
 use crate::platform::{focus_window, main_window_for_pid, process_map};
-use std::collections::HashSet;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -151,14 +151,22 @@ fn key_input(vk: u16, scan: u16, flags: u32) -> INPUT {
 
 fn send_inputs(inputs: &[INPUT]) {
     unsafe {
-        SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        );
     }
 }
 
 /// Press the keys in order, release in reverse (e.g. Ctrl+Shift+T).
 fn send_chord(vks: &[u16]) {
     let mut seq: Vec<INPUT> = vks.iter().map(|&vk| key_input(vk, 0, 0)).collect();
-    seq.extend(vks.iter().rev().map(|&vk| key_input(vk, 0, KEYEVENTF_KEYUP)));
+    seq.extend(
+        vks.iter()
+            .rev()
+            .map(|&vk| key_input(vk, 0, KEYEVENTF_KEYUP)),
+    );
     send_inputs(&seq);
 }
 
@@ -174,57 +182,19 @@ fn type_text(s: &str) {
 
 // ---- per-tab focus via UI Automation (port of WtTabs.cs) ----
 //
-// Matching is fuzzy on purpose: the title Claude writes and the one the recorder captured
-// can drift, so we score shared word tokens from BOTH tab_title and topic and only switch
-// on a confident winner.
-
-const STOP_WORDS: &[&str] = &[
-    "the", "and", "for", "with", "into", "from", "that", "this", "your", "you", "set", "up",
-    "add", "fix", "new", "run", "get", "out", "off", "was", "are", "has",
-];
-
-/// Lowercased, punctuation/glyph-free, "administrator:" prefix removed.
-fn norm(s: &str) -> String {
-    let cleaned: String = s
-        .chars()
-        .flat_map(|c| {
-            if c.is_alphanumeric() {
-                c.to_lowercase().collect::<Vec<_>>()
-            } else {
-                vec![' ']
-            }
-        })
-        .collect();
-    let flat = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    flat.strip_prefix("administrator ").unwrap_or(&flat).to_string()
-}
-
-/// Meaningful word tokens (len >= 3, not a stopword) for overlap scoring.
-fn tokens(s: &str) -> Vec<String> {
-    norm(s)
-        .split_whitespace()
-        .filter(|w| w.len() >= 3 && !STOP_WORDS.contains(w))
-        .map(str::to_string)
-        .collect()
-}
+// This is just the UIA plumbing: enumerate WT's tab TabItems and their names, then hand the
+// names to tabmatch::choose() for the (tested) fuzzy-matching decision and Select() the winner.
 
 fn select_tab(hwnd: HWND, tab_title: &str, topic: &str) -> bool {
-    let mut want: HashSet<String> = tokens(tab_title).into_iter().collect();
-    want.extend(tokens(topic));
-    let (exact_a, exact_b) = (norm(tab_title), norm(topic));
-    if want.is_empty() && exact_a.is_empty() && exact_b.is_empty() {
+    let target = Target::new(tab_title, topic);
+    if target.is_empty() {
         return false;
     }
     // UIA can throw on transient window state — treat any failure as "couldn't switch".
-    unsafe { uia_select_tab(hwnd, &want, &exact_a, &exact_b).unwrap_or(false) }
+    unsafe { uia_select_tab(hwnd, &target).unwrap_or(false) }
 }
 
-unsafe fn uia_select_tab(
-    hwnd: HWND,
-    want: &HashSet<String>,
-    exact_a: &str,
-    exact_b: &str,
-) -> windows::core::Result<bool> {
+unsafe fn uia_select_tab(hwnd: HWND, target: &Target) -> windows::core::Result<bool> {
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
     };
@@ -245,67 +215,23 @@ unsafe fn uia_select_tab(
     let cond = uia.CreatePropertyCondition(UIA_ControlTypePropertyId, &var)?;
     let tabs = root.FindAll(TreeScope_Descendants, &cond)?;
     let n = tabs.Length()?;
-    let debug = std::env::var("CS_DEBUG").is_ok();
-    if debug {
-        eprintln!("uia: {n} tab items; want={want:?} exact_a='{exact_a}' exact_b='{exact_b}'");
-    }
     if n <= 1 {
         return Ok(false); // single tab — nothing to switch to
     }
 
-    let select = |el: &IUIAutomationElement| -> bool {
-        el.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId)
-            .map(|p| p.Select().is_ok())
-            .unwrap_or(false)
-    };
-
-    let mut best: Option<IUIAutomationElement> = None;
-    let (mut best_score, mut second_score) = (0usize, 0usize);
-    let mut generic_claude: Vec<IUIAutomationElement> = Vec::new();
+    // Collect tabs and their names in order, then let the tested policy pick the index.
+    let mut els: Vec<IUIAutomationElement> = Vec::with_capacity(n as usize);
+    let mut names: Vec<String> = Vec::with_capacity(n as usize);
     for i in 0..n {
         let el = tabs.GetElement(i)?;
-        let name = el.CurrentName().map(|b| b.to_string()).unwrap_or_default();
-        let nn = norm(&name);
-        if debug {
-            eprintln!("uia tab {i}: '{name}' (norm '{nn}')");
-        }
-        if !nn.is_empty() && (nn == exact_a || nn == exact_b) {
-            let ok = select(&el);
-            if debug {
-                eprintln!("uia: exact match -> select = {ok}");
-            }
-            return Ok(ok); // exact title wins outright
-        }
-        if nn == "claude code" {
-            generic_claude.push(el.clone()); // a tab still showing the default title
-        }
-        let score = tokens(&name).iter().filter(|t| want.contains(*t)).count();
-        if score > best_score {
-            second_score = best_score;
-            best_score = score;
-            best = Some(el);
-        } else if score > second_score {
-            second_score = score;
-        }
+        names.push(el.CurrentName().map(|b| b.to_string()).unwrap_or_default());
+        els.push(el);
     }
-    // Confident match only: a clear token winner (>=2 shared, or a single distinctive token
-    // no other tab shares). A tie → don't guess.
-    if let Some(el) = best {
-        if best_score >= 2 || (best_score == 1 && second_score == 0) {
-            if debug {
-                eprintln!("uia: token match ({best_score}/{second_score}) -> select");
-            }
-            return Ok(select(&el));
-        }
-    }
-    // Nothing matched: a session whose recorded title matches no tab usually sits in a tab
-    // still titled "Claude Code" (the session never set one). If there's exactly one such
-    // tab, it's unambiguous; with several (or none), stay put.
-    if generic_claude.len() == 1 {
-        if debug {
-            eprintln!("uia: unique generic 'Claude Code' tab -> select");
-        }
-        return Ok(select(&generic_claude[0]));
-    }
-    Ok(false)
+    let Some(idx) = tabmatch::choose(&names, target) else {
+        return Ok(false);
+    };
+    Ok(els[idx]
+        .GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId)
+        .map(|p| p.Select().is_ok())
+        .unwrap_or(false))
 }

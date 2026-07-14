@@ -37,7 +37,9 @@ pub fn record(state: &str) {
         str_of(&reg, "cwd"),
         str_of(&data, "cwd"),
         str_of(&prev, "cwd"),
-        std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
+        std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
     ]);
     let self_ppid = platform::parent_pid(std::process::id() as i64);
     let mut pid = i64_of(&reg, "pid");
@@ -59,7 +61,11 @@ pub fn record(state: &str) {
         }
     }
 
-    let mut eff = if state == "start" { "idle".to_string() } else { state.to_string() };
+    let mut eff = if state == "start" {
+        "idle".to_string()
+    } else {
+        state.to_string()
+    };
     let mut msg = sanitize(&str_of(&data, "message"));
 
     if eff == "needs" && msg.to_lowercase().contains("waiting for") {
@@ -71,7 +77,11 @@ pub fn record(state: &str) {
         if verdict == "yourturn" {
             eff = "yourturn".to_string();
             if msg.is_empty() {
-                msg = if snippet.is_empty() { "your turn".into() } else { snippet };
+                msg = if snippet.is_empty() {
+                    "your turn".into()
+                } else {
+                    snippet
+                };
             }
         }
     }
@@ -96,21 +106,67 @@ pub fn record(state: &str) {
 
 const DEFAULT_BRANCHES: &[&str] = &["main", "master", "develop", "trunk"];
 const META_TITLES: &[&str] = &[
-    "dig deeper and follow up", "dig deeper", "follow up", "follow-up", "continue",
-    "keep going", "next", "next steps", "more", "help", "untitled", "new chat",
-    "wip", "test", "testing", "debugging", "conversation",
+    "dig deeper and follow up",
+    "dig deeper",
+    "follow up",
+    "follow-up",
+    "continue",
+    "keep going",
+    "next",
+    "next steps",
+    "more",
+    "help",
+    "untitled",
+    "new chat",
+    "wip",
+    "test",
+    "testing",
+    "debugging",
+    "conversation",
 ];
 const TRIVIAL_PROMPTS: &[&str] = &[
-    "yes", "no", "y", "n", "ok", "okay", "sure", "go", "do it", "continue", "proceed",
-    "next", "commit", "push", "thanks", "ty", "yep", "yeah", "nope", "stop", "wait",
-    "please", "done", "good", "perfect", "nice", "cool", "great", "fix it", "go on",
-    "keep going", "carry on",
+    "yes",
+    "no",
+    "y",
+    "n",
+    "ok",
+    "okay",
+    "sure",
+    "go",
+    "do it",
+    "continue",
+    "proceed",
+    "next",
+    "commit",
+    "push",
+    "thanks",
+    "ty",
+    "yep",
+    "yeah",
+    "nope",
+    "stop",
+    "wait",
+    "please",
+    "done",
+    "good",
+    "perfect",
+    "nice",
+    "cool",
+    "great",
+    "fix it",
+    "go on",
+    "keep going",
+    "carry on",
 ];
 
 fn custom_label(sid: &str) -> Option<String> {
     let m = load_json(&labels_path());
     let v = m.get(sid)?.as_str()?.trim().to_string();
-    if v.is_empty() { None } else { Some(v) }
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
 }
 
 fn is_substantial(txt: &str) -> bool {
@@ -163,7 +219,11 @@ fn derive_label(sid: &str, reg: &Value, cwd: &str, transcript: &str) -> String {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    if base.is_empty() { cwd.to_string() } else { base }
+    if base.is_empty() {
+        cwd.to_string()
+    } else {
+        base
+    }
 }
 
 fn registry_for(sid: &str) -> Value {
@@ -176,8 +236,12 @@ fn registry_for(sid: &str) -> Value {
         if e.path().extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
-        let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
+        let Ok(text) = std::fs::read_to_string(e.path()) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
         if !v.is_object() || str_of(&v, "sessionId") != sid {
             continue;
         }
@@ -250,7 +314,18 @@ fn classify_turn(transcript: &str) -> (String, String) {
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    let lines: Vec<&str> = text.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).collect();
+    classify_turn_text(&text)
+}
+
+/// Decide Done vs Your-turn from the assistant's final message text, plus a short snippet to
+/// show for your-turn. Looks at the last non-empty line: `⏳` → your turn (snippet = the line
+/// above it), `✅` → done, otherwise a trailing `?` is a weak your-turn fallback, else done.
+fn classify_turn_text(text: &str) -> (String, String) {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !l.trim().is_empty())
+        .collect();
     let Some(last) = lines.last() else {
         return ("done".into(), String::new());
     };
@@ -287,7 +362,11 @@ fn current_turn_text(transcript: &str) -> String {
         };
         let role = {
             let r = str_of(m, "role");
-            if r.is_empty() { str_of(obj, "type") } else { r }
+            if r.is_empty() {
+                str_of(obj, "type")
+            } else {
+                r
+            }
         };
         if role == "user" {
             last_user = i as i64;
@@ -299,7 +378,11 @@ fn current_turn_text(transcript: &str) -> String {
             }
         }
     }
-    if a_idx > last_user { a_text } else { String::new() }
+    if a_idx > last_user {
+        a_text
+    } else {
+        String::new()
+    }
 }
 
 fn read_all_entries(path: &str) -> Vec<Value> {
@@ -386,7 +469,10 @@ fn sanitize(s: &str) -> String {
     if s.is_empty() {
         return String::new();
     }
-    s.replace('"', "'").replace('\n', " ").replace('\r', " ").trim().to_string()
+    s.replace('"', "'")
+        .replace(['\n', '\r'], " ")
+        .trim()
+        .to_string()
 }
 
 fn expand_user(p: &str) -> std::path::PathBuf {
@@ -398,5 +484,80 @@ fn expand_user(p: &str) -> std::path::PathBuf {
 }
 
 fn first_nonempty(xs: &[String]) -> String {
-    xs.iter().find(|s| !s.is_empty()).cloned().unwrap_or_default()
+    xs.iter()
+        .find(|s| !s.is_empty())
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marker_done_when_last_line_has_check() {
+        assert_eq!(
+            classify_turn_text("did the thing\n\n✅"),
+            ("done".into(), String::new())
+        );
+    }
+
+    #[test]
+    fn marker_yourturn_when_last_line_has_hourglass() {
+        let (verdict, snippet) = classify_turn_text("Which database should I use?\n⏳");
+        assert_eq!(verdict, "yourturn");
+        assert_eq!(snippet, "Which database should I use?"); // snippet is the line above ⏳
+    }
+
+    #[test]
+    fn hourglass_alone_gives_empty_snippet() {
+        assert_eq!(classify_turn_text("⏳"), ("yourturn".into(), String::new()));
+    }
+
+    #[test]
+    fn trailing_question_is_a_weak_yourturn() {
+        let (verdict, snippet) = classify_turn_text("some reasoning\nShould I proceed?");
+        assert_eq!(verdict, "yourturn");
+        assert_eq!(snippet, "Should I proceed?");
+    }
+
+    #[test]
+    fn plain_text_and_empty_are_done() {
+        assert_eq!(classify_turn_text("all set, nothing needed").0, "done");
+        assert_eq!(classify_turn_text("").0, "done");
+        assert_eq!(classify_turn_text("   \n  \n").0, "done");
+    }
+
+    #[test]
+    fn check_beats_a_dangling_earlier_question() {
+        // A `?` earlier in the turn must not override a final ✅ line.
+        assert_eq!(
+            classify_turn_text("Do you want X?\nOkay, done.\n✅").0,
+            "done"
+        );
+    }
+
+    #[test]
+    fn is_substantial_filters_trivial_and_short_prompts() {
+        assert!(is_substantial("please refactor the auth module"));
+        assert!(!is_substantial("ok")); // trivial + too short
+        assert!(!is_substantial("yes")); // in TRIVIAL_PROMPTS
+        assert!(!is_substantial("<command-name>")); // tool/meta noise
+        assert!(!is_substantial(""));
+    }
+
+    #[test]
+    fn short_truncates_on_a_word_boundary_with_ellipsis() {
+        assert_eq!(short("keep me", 20), "keep me"); // under the limit, untouched
+        assert_eq!(short("one two three four five", 12), "one two…");
+    }
+
+    #[test]
+    fn sanitize_flattens_quotes_and_newlines() {
+        assert_eq!(
+            sanitize("he said \"hi\"\nthen left"),
+            "he said 'hi' then left"
+        );
+        assert_eq!(sanitize(""), "");
+    }
 }

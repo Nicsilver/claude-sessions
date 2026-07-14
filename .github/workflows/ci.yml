@@ -1,0 +1,38 @@
+name: CI
+
+# Verifies the Rust app on every push/PR to main: formatting, clippy (as errors), tests, and a
+# release build — on both OSes so the Windows-only (wt.rs) and macOS-only (macos_terminal.rs)
+# code paths are both checked. release.yml handles tagged releases; this never runs on tags.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: session-status/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: session-status/app
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test
+      - name: Build (release)
+        run: cargo build --release

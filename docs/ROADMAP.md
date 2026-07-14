@@ -19,17 +19,17 @@ GitHub Release, plus an update signing keypair (separate from code signing). Che
 maybe a "Check for updates" tray item. Best paired with the SignPath code-signing work so updates
 don't trip SmartScreen.
 
-## 3. CI on `main` + tests
+## 3. CI on `main` + tests  ✅ done
 
-- `rust-app.yml` is pinned to the dead `rust-rewrite` branch, so **nothing verifies that `main`
-  builds** — `release.yml` only runs on tags. Point a CI workflow at push/PR to `main` that runs
-  `cargo build`, `cargo fmt --check`, and `cargo clippy -D warnings` on Windows + macOS.
-- Add unit tests for the invariant-critical logic (currently zero tests):
-  - the non-destructive hook merge in `install.rs` — **must never** clobber unrelated hooks
-    (e.g. Nic's "awake" hooks); `is_recorder_cmd` only matches recorder executables.
-  - the fuzzy WT tab matching in `terminals/wt.rs` (token overlap, exact-title win, the single
-    generic "Claude Code" fallback, and "don't guess on a tie").
-  - the ⏳/✅ turn-marker parsing in `recorder.rs` (marker → Done/Your-turn, `?`-fallback).
+`.github/workflows/ci.yml` runs on every push/PR to `main` (Windows + macOS): `cargo fmt --check`,
+`cargo clippy --all-targets -D warnings`, `cargo test`, and a release build. Replaced the dead
+`rust-app.yml` (which was pinned to the merged `rust-rewrite` branch, so nothing verified `main`).
+Unit tests cover the invariant-critical logic:
+- the non-destructive hook merge (`is_recorder_cmd`/`is_ours` in `install.rs`) — proves a user's
+  unrelated hooks (e.g. "awake") are never matched as ours.
+- the fuzzy WT tab matching, extracted into the platform-independent `terminals/tabmatch.rs`
+  (token overlap, exact-title win, single generic "Claude Code" fallback, don't-guess-on-a-tie).
+- the ⏳/✅ turn-marker parsing (`classify_turn_text` in `recorder.rs`).
 
 ## 4. Auto-hide / auto-show (two independent options)
 

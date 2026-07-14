@@ -75,7 +75,10 @@ pub fn uninstall_app() -> i32 {
         .map(|c| same_file(&c, &dest))
         .unwrap_or(false);
     if running_from_install {
-        println!("Launch-at-login removed. Delete {} yourself once this exits.", dest.display());
+        println!(
+            "Launch-at-login removed. Delete {} yourself once this exits.",
+            dest.display()
+        );
         return 0;
     }
     if dest.exists() {
@@ -84,7 +87,10 @@ pub fn uninstall_app() -> i32 {
     if let Some(dir) = dest.parent() {
         let _ = std::fs::remove_dir(dir); // only succeeds if now empty — leave a non-empty dir be
     }
-    println!("Uninstalled (launch-at-login cleared, {} removed).", dest.display());
+    println!(
+        "Uninstalled (launch-at-login cleared, {} removed).",
+        dest.display()
+    );
     0
 }
 
@@ -103,7 +109,13 @@ fn stop_other_instances() {
     {
         let me = std::process::id();
         let _ = std::process::Command::new("taskkill")
-            .args(["/F", "/IM", "claude-sessions.exe", "/FI", &format!("PID ne {me}")])
+            .args([
+                "/F",
+                "/IM",
+                "claude-sessions.exe",
+                "/FI",
+                &format!("PID ne {me}"),
+            ])
             .output();
     }
     #[cfg(unix)]

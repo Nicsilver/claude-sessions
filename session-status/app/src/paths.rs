@@ -11,16 +11,34 @@ pub fn home() -> PathBuf {
     PathBuf::from(v.unwrap_or_default())
 }
 
-pub fn base() -> PathBuf { home().join(".claude").join("session-status") }
-pub fn state_dir() -> PathBuf { base().join("state") }
-pub fn labels_path() -> PathBuf { base().join("labels.json") }
-pub fn mutes_path() -> PathBuf { base().join("mutes.json") }
-pub fn request_path() -> PathBuf { base().join("focus-request.json") }
+pub fn base() -> PathBuf {
+    home().join(".claude").join("session-status")
+}
+pub fn state_dir() -> PathBuf {
+    base().join("state")
+}
+pub fn labels_path() -> PathBuf {
+    base().join("labels.json")
+}
+pub fn mutes_path() -> PathBuf {
+    base().join("mutes.json")
+}
+pub fn request_path() -> PathBuf {
+    base().join("focus-request.json")
+}
 #[cfg(unix)]
-pub fn tab_names_dir() -> PathBuf { base().join("tab-names") }
-pub fn config_path() -> PathBuf { base().join("config.json") }
-pub fn sessions_dir() -> PathBuf { home().join(".claude").join("sessions") }
-pub fn settings_path() -> PathBuf { home().join(".claude").join("settings.json") }
+pub fn tab_names_dir() -> PathBuf {
+    base().join("tab-names")
+}
+pub fn config_path() -> PathBuf {
+    base().join("config.json")
+}
+pub fn sessions_dir() -> PathBuf {
+    home().join(".claude").join("sessions")
+}
+pub fn settings_path() -> PathBuf {
+    home().join(".claude").join("settings.json")
+}
 
 /// Permanent per-user home for `install-app` to copy the binary to, so launch-at-login points at
 /// a stable path (not a build tree). Windows: %LOCALAPPDATA%\ClaudeSessions; macOS: Application
@@ -35,7 +53,10 @@ pub fn install_dir() -> PathBuf {
     }
     #[cfg(target_os = "macos")]
     {
-        home().join("Library").join("Application Support").join("ClaudeSessions")
+        home()
+            .join("Library")
+            .join("Application Support")
+            .join("ClaudeSessions")
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -45,7 +66,11 @@ pub fn install_dir() -> PathBuf {
 
 /// The installed binary path (platform-correct filename).
 pub fn installed_exe() -> PathBuf {
-    let name = if cfg!(windows) { "claude-sessions.exe" } else { "claude-sessions" };
+    let name = if cfg!(windows) {
+        "claude-sessions.exe"
+    } else {
+        "claude-sessions"
+    };
     install_dir().join(name)
 }
 

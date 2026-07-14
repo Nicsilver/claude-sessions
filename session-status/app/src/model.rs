@@ -44,7 +44,9 @@ pub fn load() -> Vec<Sess> {
         if e.path().extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
+        let Ok(text) = std::fs::read_to_string(e.path()) else {
+            continue;
+        };
         let Ok(root) = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) else {
             continue; // partial write mid-refresh
         };
@@ -66,15 +68,31 @@ pub fn load() -> Vec<Sess> {
             .get(&id)
             .filter(|s| !s.is_empty())
             .cloned()
-            .or_else(|| if tab_title.is_empty() { None } else { Some(tab_title.clone()) })
-            .unwrap_or_else(|| if topic.is_empty() { "?".into() } else { topic.clone() });
+            .or_else(|| {
+                if tab_title.is_empty() {
+                    None
+                } else {
+                    Some(tab_title.clone())
+                }
+            })
+            .unwrap_or_else(|| {
+                if topic.is_empty() {
+                    "?".into()
+                } else {
+                    topic.clone()
+                }
+            });
 
         out.push(Sess {
             id: id.clone(),
             topic: display,
             state: {
                 let s = str_of(&root, "state");
-                if s.is_empty() { "?".into() } else { s }
+                if s.is_empty() {
+                    "?".into()
+                } else {
+                    s
+                }
             },
             updated: f64_of(&root, "updated_at"),
             message: str_of(&root, "message"),
@@ -91,13 +109,19 @@ pub fn load() -> Vec<Sess> {
     out.sort_by(|a, b| {
         let (am, bm) = (a.muted(n), b.muted(n));
         if am != bm {
-            return if am { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Less };
+            return if am {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Less
+            };
         }
         let (oa, ob) = (state_order(&a.state), state_order(&b.state));
         if oa != ob {
             return oa.cmp(&ob);
         }
-        b.updated.partial_cmp(&a.updated).unwrap_or(std::cmp::Ordering::Equal)
+        b.updated
+            .partial_cmp(&a.updated)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     out
 }

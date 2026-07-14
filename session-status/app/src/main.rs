@@ -61,7 +61,11 @@ fn main() {
         // Append the optional ⏳/✅ turn-marker instruction to the global CLAUDE.md.
         Some("markers") => {
             platform::attach_parent_console();
-            std::process::exit(if install::append_claude_md_markers() { 0 } else { 1 })
+            std::process::exit(if install::append_claude_md_markers() {
+                0
+            } else {
+                1
+            })
         }
         // Default (double-click): launch the floating dashboard + tray.
         _ => {

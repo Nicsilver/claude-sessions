@@ -8,6 +8,9 @@ use crate::model::Sess;
 mod jetbrains;
 #[cfg(target_os = "macos")]
 mod macos_terminal;
+// Pure WT tab-matching policy; used by wt.rs (Windows) but kept platform-independent so its
+// unit tests run on every CI target.
+mod tabmatch;
 #[cfg(windows)]
 mod wt;
 

@@ -8,9 +8,16 @@ use crate::model::Sess;
 pub struct MacTerminal;
 
 fn osascript(script: &str) -> Option<String> {
-    let o = std::process::Command::new("osascript").arg("-e").arg(script).output().ok()?;
+    let o = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .ok()?;
     if !o.status.success() {
-        eprintln!("osascript failed: {}", String::from_utf8_lossy(&o.stderr).trim());
+        eprintln!(
+            "osascript failed: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        );
         return None;
     }
     Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -53,7 +60,9 @@ impl Terminal for MacTerminal {
     }
 
     fn focus(&self, s: &Sess) -> bool {
-        let Some(dev) = dev_tty(&s.tty) else { return false };
+        let Some(dev) = dev_tty(&s.tty) else {
+            return false;
+        };
         osascript(&format!(
             r#"tell application "Terminal"
                 repeat with w in windows
@@ -78,9 +87,13 @@ impl Terminal for MacTerminal {
         // the tty, like dropping the connection. A single-tab window is then closed outright
         // (the shell is already dead, so Terminal doesn't prompt); a dead tab in a multi-tab
         // window is left showing [Process completed].
-        let Some(dev) = dev_tty(&s.tty) else { return false };
+        let Some(dev) = dev_tty(&s.tty) else {
+            return false;
+        };
         let win = window_of(&dev);
-        let Ok(o) = std::process::Command::new("ps").args(["-t", &s.tty, "-o", "pid="]).output()
+        let Ok(o) = std::process::Command::new("ps")
+            .args(["-t", &s.tty, "-o", "pid="])
+            .output()
         else {
             return false;
         };
@@ -95,7 +108,9 @@ impl Terminal for MacTerminal {
         if let Some((wid, tabs)) = win {
             if tabs == 1 {
                 std::thread::sleep(std::time::Duration::from_millis(400));
-                osascript(&format!(r#"tell application "Terminal" to close window id {wid}"#));
+                osascript(&format!(
+                    r#"tell application "Terminal" to close window id {wid}"#
+                ));
             }
             return true;
         }
