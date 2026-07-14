@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Widget window: core events plus the window ops the frontend drives (auto-height, hide-to-tray, drag regions).",
+  "windows": ["main", "menu"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:window:allow-start-dragging"
+  ]
+}

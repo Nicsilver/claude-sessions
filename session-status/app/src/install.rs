@@ -116,6 +116,12 @@ pub fn run(install: bool) -> i32 {
         println!("installed session-status hooks on {changed} events");
         println!("recorder: {}", our_command());
         println!("Start a NEW Claude session (or send a prompt) to populate the widget.");
+        if !claude_md_has_markers() {
+            println!();
+            println!("Optional: `claude-sessions markers` adds a turn-marker instruction (⏳/✅)");
+            println!("to ~/.claude/CLAUDE.md so done/your-turn states are accurate.");
+            println!("Also available from the tray icon's right-click menu.");
+        }
     } else {
         println!("removed {changed} session-status hook group(s); your other hooks are untouched");
     }

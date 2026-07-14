@@ -11,7 +11,6 @@ mod paths;
 mod platform;
 mod recorder;
 mod styles;
-mod tray;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -22,10 +21,21 @@ fn main() {
             recorder::record(state);
             std::process::exit(0);
         }
-        Some("install") => std::process::exit(install::run(true)),
-        Some("uninstall") => std::process::exit(install::run(false)),
+        // CLI subcommands attach the launching console first so their output is visible in
+        // release builds (windows subsystem detaches stdio).
+        Some("install") => {
+            platform::attach_parent_console();
+            std::process::exit(install::run(true))
+        }
+        Some("uninstall") => {
+            platform::attach_parent_console();
+            std::process::exit(install::run(false))
+        }
         // Append the optional ⏳/✅ turn-marker instruction to the global CLAUDE.md.
-        Some("markers") => std::process::exit(if install::append_claude_md_markers() { 0 } else { 1 }),
+        Some("markers") => {
+            platform::attach_parent_console();
+            std::process::exit(if install::append_claude_md_markers() { 0 } else { 1 })
+        }
         // Default (double-click): launch the floating dashboard + tray.
         _ => {
             if let Err(e) = gui::run() {

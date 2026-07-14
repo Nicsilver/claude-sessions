@@ -1,0 +1,254 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Claude sessions</title>
+<style>
+  /* Ported from floatdash.swift / MainWindow.cs — same colours, sizes and effects. */
+  * { margin:0; padding:0; box-sizing:border-box; user-select:none; -webkit-user-select:none; cursor:default; }
+  html, body { background:transparent; overflow:hidden; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  #panel {
+    margin:14px;                              /* gutter the drop shadow falls into */
+    background:#1a1a1a;
+    border-radius:10px;
+    border:1px solid rgba(255,255,255,.165);
+    /* Must fully fade inside the 14px gutter or it clips with a hard edge. */
+    box-shadow:0 4px 9px rgba(0,0,0,.45), 0 1px 4px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+
+  header { height:28px; display:flex; align-items:center; padding:0 8px; }
+  header .title { flex:1; text-align:center; font-size:11.5px; color:#98989E; pointer-events:none; }
+  .disc {
+    width:18px; height:18px; border-radius:9px; flex:none;
+    display:flex; align-items:center; justify-content:center;
+    color:#98989E; font-size:14px; line-height:1; cursor:pointer;
+  }
+  .disc:hover { color:#ECECEC; background:rgba(255,255,255,.13); }
+  #plus { font-size:15px; }
+
+  #list { padding:4px 6px; overflow-y:auto; overflow-x:hidden; }
+  #list::-webkit-scrollbar { width:0; }
+
+  .row {
+    position:relative; height:24px;
+    display:flex; align-items:center;
+    cursor:pointer;
+  }
+  .row::before {                              /* right-to-left state glow */
+    content:""; position:absolute; left:2px; right:2px; top:1px; bottom:1px;
+    border-radius:6px;
+    background:linear-gradient(90deg, transparent 30%, var(--glow, transparent) 100%);
+  }
+  .row::after {                               /* hover bloom that follows the cursor */
+    content:""; position:absolute; left:4px; right:4px; top:1px; bottom:1px;
+    border-radius:6px; opacity:0; pointer-events:none;
+    background:radial-gradient(95px circle at var(--mx, 50%) 50%, rgba(255,255,255,.13), transparent);
+  }
+  .row:hover::after { opacity:1; }
+  .bar {
+    width:3px; height:16px; border-radius:1.5px; flex:none;
+    margin-left:7px; position:relative; background:var(--col, #5A5A5E);
+  }
+  .name {
+    flex:1; min-width:0; position:relative;
+    margin-left:4px; font-size:11.5px; color:#ECECEC;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .name input {
+    width:100%; font:inherit; color:#ECECEC; background:rgba(255,255,255,.08);
+    border:1px solid rgba(255,255,255,.2); border-radius:4px; padding:1px 4px; outline:none;
+    user-select:text; -webkit-user-select:text; cursor:text;
+  }
+  .meta {
+    flex:none; position:relative;
+    margin:0 11px 0 8px; font-size:10px; color:#98989E;
+  }
+  .row.muted .name, .row.muted .meta { color:#6A6A6E; }
+  .row.muted .bar { background:#6A6A6E; }
+
+  #empty { text-align:center; padding:16px 0; font-size:12px; color:#6A6A6E; }
+
+  #sep { height:1px; background:#333; margin:0 14px; }
+
+  footer { display:flex; justify-content:center; gap:14px; padding:7px 0 9px; }
+  .chip { display:flex; align-items:center; gap:4px; pointer-events:none; }
+  .chip .dot {
+    width:11px; height:11px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-size:8px; font-weight:700; color:#1a1a1a; line-height:1;
+  }
+  .chip .n { font-size:11.5px; font-weight:600; color:#ECECEC; }
+  .chip.zero .n { color:#6A6A6E; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <header data-tauri-drag-region>
+    <div class="disc" id="close" title="Hide to tray">&times;</div>
+    <div class="title" data-tauri-drag-region>Claude sessions</div>
+    <div class="disc" id="plus" title="New Claude session">+</div>
+  </header>
+  <div id="list"></div>
+  <div id="sep"></div>
+  <footer data-tauri-drag-region id="chips"></footer>
+</div>
+
+<script>
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+const appWindow = window.__TAURI__.window.getCurrentWindow();
+const { LogicalSize } = window.__TAURI__.dpi;
+
+const COLORS = {
+  needs:    "255,69,58",    // systemRed
+  yourturn: "255,214,10",   // systemYellow
+  working:  "52,199,89",    // systemGreen
+  done:     "142,142,147",  // systemGray
+  idle:     "90,90,94",
+};
+const ACTIVE = new Set(["needs", "yourturn", "working"]);
+const rgb = s => COLORS[s] || COLORS.idle;
+
+let sessions = [];
+let renaming = null;   // session id currently being renamed inline
+let lastH = 0;
+
+function ageStr(ts) {
+  if (!ts) return "";
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (s < 60) return s + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m";
+  return Math.floor(s / 3600) + "h";
+}
+
+function metaFor(s) {
+  const now = Date.now() / 1000;
+  if (s.mute_until > now) return "muted · " + Math.max(1, Math.ceil((s.mute_until - now) / 60)) + "m";
+  const parts = [];
+  if (s.terminal === "jetbrains") parts.push("IDE");
+  const age = ageStr(s.updated);
+  if (age) parts.push(age);
+  return parts.join(" · ");
+}
+
+function render() {
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+  if (!sessions.length) {
+    list.innerHTML = '<div id="empty">No active sessions</div>';
+  }
+  const now = Date.now() / 1000;
+  for (const s of sessions) {
+    const muted = s.mute_until > now;
+    const active = ACTIVE.has(s.state);
+    const row = document.createElement("div");
+    row.className = "row" + (muted ? " muted" : "");
+    row.style.setProperty("--col", `rgb(${rgb(s.state)})`);
+    if (!muted) {
+      row.style.setProperty("--glow", `rgba(${rgb(s.state)},${active ? 0.22 : 0.066})`);
+    }
+
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    const name = document.createElement("div");
+    name.className = "name";
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = metaFor(s);
+    row.append(bar, name, meta);
+
+    if (renaming === s.id) {
+      const input = document.createElement("input");
+      input.value = s.topic;
+      name.appendChild(input);
+      setTimeout(() => { input.focus(); input.select(); }, 0);
+      let committed = false;                          // Enter also fires blur; commit once
+      const commit = ok => {
+        if (committed) return;
+        committed = true;
+        const v = input.value;
+        renaming = null;
+        if (ok) invoke("rename", { id: s.id, name: v }).then(refresh);
+        else render();
+      };
+      input.addEventListener("keydown", e => {
+        if (e.key === "Enter") commit(true);
+        if (e.key === "Escape") commit(false);
+        e.stopPropagation();
+      });
+      input.addEventListener("blur", () => commit(true));
+      input.addEventListener("mousedown", e => e.stopPropagation());
+    } else {
+      name.textContent = s.topic;
+      if (!muted && active) name.style.color = `rgb(${rgb(s.state)})`;
+    }
+
+    row.addEventListener("mousemove", e => {
+      row.style.setProperty("--mx", (e.clientX - row.getBoundingClientRect().left) + "px");
+    });
+    row.addEventListener("click", e => {
+      if (renaming) return;
+      if (e.altKey) { renaming = s.id; render(); return; }
+      invoke("jump", { terminal: s.terminal, termPid: s.term_pid, pid: s.pid });
+    });
+    row.addEventListener("auxclick", e => {           // middle-click → mute 1h
+      if (e.button === 1) invoke("toggle_mute", { id: s.id }).then(refresh);
+    });
+    list.appendChild(row);
+  }
+  renderChips();
+  fitHeight();
+}
+
+function renderChips() {
+  const keys = [["needs", "!"], ["yourturn", ""], ["working", ""], ["done", "✓"]];
+  const el = document.getElementById("chips");
+  el.innerHTML = "";
+  for (const [key, glyph] of keys) {
+    const n = sessions.filter(s => s.state === key).length;
+    const chip = document.createElement("div");
+    chip.className = "chip" + (n ? "" : " zero");
+    const dot = document.createElement("div");
+    dot.className = "dot";
+    dot.style.background = n ? `rgb(${rgb(key)})` : "#6A6A6E";
+    dot.textContent = glyph;
+    const count = document.createElement("div");
+    count.className = "n";
+    count.textContent = n;
+    chip.append(dot, count);
+    el.appendChild(chip);
+  }
+}
+
+function fitHeight() {
+  // Cap the list so a long session list scrolls instead of running off the screen.
+  const cap = Math.max(120, screen.availHeight - 140);
+  document.getElementById("list").style.maxHeight = cap + "px";
+  const h = Math.ceil(document.getElementById("panel").getBoundingClientRect().height) + 28;
+  if (h !== lastH) {
+    lastH = h;
+    appWindow.setSize(new LogicalSize(328, h));
+  }
+}
+
+function refresh() { invoke("load_sessions").then(s => { sessions = s; render(); }); }
+
+document.getElementById("close").addEventListener("click", () => appWindow.hide());
+document.getElementById("plus").addEventListener("click", () => invoke("new_session"));
+document.addEventListener("contextmenu", e => e.preventDefault());
+
+listen("sessions", e => { sessions = e.payload; render(); });
+setInterval(() => {                                   // tick ages between pushes
+  document.querySelectorAll(".row .meta").forEach((m, i) => {
+    if (sessions[i]) m.textContent = metaFor(sessions[i]);
+  });
+}, 1000);
+refresh();
+</script>
+</body>
+</html>

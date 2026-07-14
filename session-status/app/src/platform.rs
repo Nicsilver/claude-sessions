@@ -238,6 +238,21 @@ mod imp {
         let h = main_window_for_pid(p);
         focus_window(h);
     }
+
+    pub fn new_session() {
+        // MVP: open a new Windows Terminal tab in the current window. The full behaviour (focus WT,
+        // Ctrl+Shift+T, type the claude command) from Interop.cs is a follow-up.
+        let _ = std::process::Command::new("wt").args(["-w", "0", "new-tab"]).spawn();
+    }
+
+    /// Attach to the launching console so CLI subcommand output (install/uninstall/markers) is
+    /// visible — release builds use the windows subsystem, which detaches stdio.
+    pub fn attach_parent_console() {
+        unsafe {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
+
 }
 
 // ============================ Unix (macOS) ============================
@@ -285,6 +300,12 @@ mod imp {
     pub fn jump(_terminal: &str, _term_pid: i64, _pid: i64) {
         // TODO(mac): focus the owning terminal via the AX API / tty. Not yet ported.
     }
+
+    pub fn new_session() {
+        // TODO(mac): open a new terminal tab. Not yet ported.
+    }
+
+    pub fn attach_parent_console() {} // unix CLIs already share the terminal's stdio
 }
 
-pub use imp::{annotate, is_alive, jump, parent_pid};
+pub use imp::{annotate, attach_parent_console, is_alive, jump, new_session, parent_pid};

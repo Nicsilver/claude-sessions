@@ -1,306 +1,154 @@
-//! The always-on-top floating dashboard (egui/eframe port of floatdash.swift / MainWindow.cs).
-//! Lists live Claude sessions; left-click a row to jump to its terminal. Hides to the tray on
-//! close; Quit lives in the tray menu.
+//! The always-on-top floating dashboard (Tauri v2 port of floatdash.swift / MainWindow.cs).
+//! The window chrome (transparent + undecorated + CSS drop shadow) and all drawing live in
+//! ui/index.html; this module is the shell: window placement, tray, hook auto-install, the
+//! 1.5s heartbeat that pushes sessions to the frontend, and the commands the frontend invokes.
 
-use crate::{install, model::{self, Sess}, platform, styles, tray::{Tray, TrayAction}};
-use eframe::egui;
-use egui::{Align2, Color32, FontId, Pos2, Rect, Rounding, Sense, Stroke, Vec2, ViewportCommand};
-use std::time::{Duration, Instant};
+use crate::{install, model, platform, styles};
+use serde_json::{json, Value};
+use std::time::Duration;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager, WindowEvent};
 
-const W: f32 = 300.0;
-const H: f32 = 440.0;
+pub fn run() -> tauri::Result<()> {
+    // First-run: wire the Claude Code hooks so simply launching the exe is enough.
+    if !install::already_installed() {
+        let _ = install::run(true);
+    }
 
-pub fn run() -> eframe::Result<()> {
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Claude sessions")
-            .with_inner_size([W, H])
-            .with_decorations(false)
-            .with_transparent(true)
-            .with_always_on_top()
-            .with_taskbar(false)
-            .with_resizable(false),
-        ..Default::default()
-    };
-    eframe::run_native(
-        "Claude sessions",
-        options,
-        Box::new(|cc| Ok(Box::new(App::new(cc)))),
-    )
-}
+    // A static 300px panel doesn't need GPU compositing; software raster renders it identically
+    // and drops WebView2's private memory by ~100MB (the GPU process). Overridable via the env.
+    if std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_err() {
+        std::env::set_var(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--disable-gpu --disable-gpu-compositing",
+        );
+    }
 
-struct App {
-    sessions: Vec<Sess>,
-    last_refresh: Instant,
-    tray: Option<Tray>,
-    visible: bool,
-    quitting: bool,
-    positioned: bool,
-    marker_offer: bool, // show the one-time "add ⏳/✅ to CLAUDE.md?" banner
-}
-
-fn marker_dismiss_flag() -> std::path::PathBuf {
-    crate::paths::base().join(".marker-offer-dismissed")
-}
-
-impl App {
-    fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // First-run: wire the Claude Code hooks so simply launching the exe is enough.
-        if !install::already_installed() {
-            let _ = install::run(true);
-        }
-        // Heartbeat thread: wake the UI ~2×/sec so the tray badge and dead-session cleanup keep
-        // ticking even while the window is hidden to the tray (a hidden window gets no repaints).
-        {
-            let ctx = cc.egui_ctx.clone();
+    tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            load_sessions,
+            jump,
+            new_session,
+            toggle_mute,
+            rename,
+            menu_action
+        ])
+        .setup(|app| {
+            setup_tray(app.handle())?;
+            if let Some(win) = app.get_webview_window("main") {
+                position_top_right(&win);
+                let _ = win.show();
+            }
+            // Heartbeat: reload sessions, refresh the tray badge, push to the frontend.
+            let handle = app.handle().clone();
             std::thread::spawn(move || loop {
-                std::thread::sleep(Duration::from_millis(400));
-                ctx.request_repaint();
+                let sessions = model::load();
+                update_tray(&handle, &sessions);
+                let _ = handle.emit("sessions", to_json(&sessions));
+                std::thread::sleep(Duration::from_millis(1500));
             });
-        }
-        // Offer the ⏳/✅ turn-marker tip once, unless it's already in CLAUDE.md or was dismissed.
-        let marker_offer = !marker_dismiss_flag().exists() && !install::claude_md_has_markers();
+            Ok(())
+        })
+        // Closing (Alt-F4 etc.) hides to the tray instead of quitting.
+        .on_window_event(|win, ev| {
+            if let WindowEvent::CloseRequested { api, .. } = ev {
+                api.prevent_close();
+                let _ = win.hide();
+            }
+        })
+        .run(tauri::generate_context!())?;
+    Ok(())
+}
 
-        let mut app = App {
-            sessions: Vec::new(),
-            last_refresh: Instant::now() - Duration::from_secs(10),
-            tray: Tray::new(),
-            visible: true,
-            quitting: false,
-            positioned: false,
-            marker_offer,
-        };
-        app.refresh();
-        app
-    }
+/// Pin the panel to the monitor's top-right. The html has a 14px shadow gutter, so a 6px
+/// outer margin puts the visible panel 20px from the edges, like the other surfaces.
+fn position_top_right(win: &tauri::WebviewWindow) {
+    let (Ok(Some(mon)), Ok(size)) = (win.current_monitor(), win.outer_size()) else {
+        return;
+    };
+    let x = mon.position().x + mon.size().width as i32 - size.width as i32
+        - (6.0 * mon.scale_factor()) as i32;
+    let y = mon.position().y + (26.0 * mon.scale_factor()) as i32;
+    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+}
 
-    fn dismiss_marker_offer(&mut self) {
-        self.marker_offer = false;
-        if let Some(dir) = marker_dismiss_flag().parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(marker_dismiss_flag(), "1");
-    }
-
-    /// One-time banner offering to add the turn-marker instruction to CLAUDE.md.
-    fn marker_banner(&mut self, ui: &mut egui::Ui, full: f32) {
-        let frame = egui::Frame::none()
-            .fill(Color32::from_rgb(0x2A, 0x2A, 0x2E))
-            .rounding(Rounding::same(8.0))
-            .inner_margin(egui::Margin::symmetric(10.0, 8.0));
-        egui::Frame::none()
-            .inner_margin(egui::Margin::symmetric(8.0, 2.0))
-            .show(ui, |ui| {
-                ui.set_width(full - 16.0);
-                frame.show(ui, |ui| {
-                    ui.label(egui::RichText::new("Add turn markers to CLAUDE.md?")
-                        .size(12.0).color(styles::LABEL));
-                    ui.label(egui::RichText::new("Lets Claude flag done vs your-turn accurately.")
-                        .size(10.5).color(styles::SECONDARY));
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Add").clicked() {
-                            install::append_claude_md_markers();
-                            self.dismiss_marker_offer();
-                        }
-                        if ui.button("Dismiss").clicked() {
-                            self.dismiss_marker_offer();
-                        }
-                    });
-                });
-            });
-        ui.add_space(2.0);
-    }
-
-    fn refresh(&mut self) {
-        self.sessions = model::load();
-        self.last_refresh = Instant::now();
-        if let Some(t) = &mut self.tray {
-            let (top, count) = top_state(&self.sessions);
-            t.update(top, count, &tooltip(&self.sessions));
-        }
-    }
-
-    fn toggle(&mut self, ctx: &egui::Context) {
-        self.visible = !self.visible;
-        ctx.send_viewport_cmd(ViewportCommand::Visible(self.visible));
-        if self.visible {
-            ctx.send_viewport_cmd(ViewportCommand::Focus);
-        }
-    }
-
-    fn header(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, full: f32) {
-        let (rect, resp) = ui.allocate_exact_size(Vec2::new(full, 30.0), Sense::click_and_drag());
-        if resp.drag_started() {
-            ctx.send_viewport_cmd(ViewportCommand::StartDrag);
-        }
-        let x_center = Pos2::new(rect.right() - 16.0, rect.center().y);
-        let x_rect = Rect::from_center_size(x_center, Vec2::splat(20.0));
-        let x_resp = ui.interact(x_rect, ui.id().with("hide-to-tray"), Sense::click());
-        if x_resp.clicked() {
-            self.visible = false;
-            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
-        }
-        let p = ui.painter();
-        p.text(rect.center(), Align2::CENTER_CENTER, "Claude sessions",
-               FontId::proportional(11.5), styles::SECONDARY);
-        let x_col = if x_resp.hovered() { styles::LABEL } else { styles::SECONDARY };
-        p.text(x_center, Align2::CENTER_CENTER, "×", FontId::proportional(16.0), x_col);
+fn toggle_window(app: &tauri::AppHandle) {
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    if win.is_visible().unwrap_or(false) {
+        let _ = win.hide();
+    } else {
+        position_top_right(&win);
+        let _ = win.show();
+        let _ = win.set_focus();
     }
 }
 
-impl eframe::App for App {
-    fn clear_color(&self, _v: &egui::Visuals) -> [f32; 4] {
-        [0.0, 0.0, 0.0, 0.0] // transparent window; the rounded panel paints the background
-    }
+// ---- tray ----
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Pin to the top-right on the first frame, using the monitor size.
-        if !self.positioned {
-            if let Some(msize) = ctx.input(|i| i.viewport().monitor_size) {
-                let x = (msize.x - W - 20.0).max(0.0);
-                ctx.send_viewport_cmd(ViewportCommand::OuterPosition(Pos2::new(x, 40.0)));
-            }
-            self.positioned = true;
-        }
-
-        if let Some(t) = &self.tray {
-            match t.poll() {
-                Some(TrayAction::Quit) => {
-                    self.quitting = true;
-                    ctx.send_viewport_cmd(ViewportCommand::Close);
+/// Left-click toggles the dashboard; right-click opens our own webview-rendered menu (the
+/// native Win32 tray menu can't be styled — same reason the WPF build had WpfTrayMenu.cs).
+fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    TrayIconBuilder::with_id("main")
+        .tooltip("Claude sessions")
+        .icon(badge_icon("idle", 0))
+        .on_tray_icon_event(|tray, ev| {
+            if let TrayIconEvent::Click { button, button_state: MouseButtonState::Up, position, .. } = ev
+            {
+                match button {
+                    MouseButton::Left => toggle_window(tray.app_handle()),
+                    MouseButton::Right => open_tray_menu(tray.app_handle(), position.x, position.y),
+                    _ => {}
                 }
-                Some(TrayAction::Toggle) => self.toggle(ctx),
-                None => {}
             }
-        }
-
-        // Closing (× / Alt-F4) hides to the tray instead of quitting the app.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
-            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-            self.visible = false;
-            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
-        }
-
-        if self.last_refresh.elapsed() >= Duration::from_millis(1500) {
-            self.refresh();
-        }
-
-        let frame = egui::Frame::none()
-            .fill(styles::BG)
-            .rounding(Rounding::same(10.0))
-            .stroke(Stroke::new(1.0, Color32::from_rgba_premultiplied(0xFF, 0xFF, 0xFF, 0x2A)))
-            .inner_margin(egui::Margin::same(0.0));
-
-        egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
-            let full = ui.available_width();
-            self.header(ui, ctx, full);
-            ui.add_space(2.0);
-
-            if self.marker_offer {
-                self.marker_banner(ui, full);
-            }
-
-            egui::ScrollArea::vertical()
-                .max_height(H - 96.0)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    if self.sessions.is_empty() {
-                        ui.add_space(18.0);
-                        ui.vertical_centered(|ui| {
-                            ui.label(egui::RichText::new("No active sessions")
-                                .size(12.0).color(styles::TERTIARY));
-                        });
-                        ui.add_space(18.0);
-                    } else {
-                        for s in self.sessions.clone() {
-                            row(ui, &s, full);
-                        }
-                    }
-                });
-
-            ui.add_space(4.0);
-            separator(ui, full);
-            ui.add_space(6.0);
-            footer(ui, &self.sessions, full);
-            ui.add_space(8.0);
-        });
-
-        ctx.request_repaint_after(Duration::from_millis(500));
-    }
+        })
+        .build(app)?;
+    Ok(())
 }
 
-fn row(ui: &mut egui::Ui, s: &Sess, full: f32) {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(full, 26.0), Sense::click());
-    if resp.clicked() {
-        platform::jump(&s.terminal, s.term_pid, s.pid);
-    }
-    let dim = s.muted(model::now());
-    let p = ui.painter();
-    if resp.hovered() {
-        p.rect_filled(rect.shrink2(Vec2::new(6.0, 1.0)), Rounding::same(6.0), styles::HOVER);
-    }
-    let dot = styles::color_for(&s.state);
-    p.circle_filled(Pos2::new(rect.left() + 16.0, rect.center().y), 5.0, dot);
-    let name_col = if dim { styles::TERTIARY } else { styles::LABEL };
-    p.text(Pos2::new(rect.left() + 30.0, rect.center().y), Align2::LEFT_CENTER,
-           truncate(&s.topic, 30), FontId::proportional(13.0), name_col);
-    let age = model::age_str(s.updated);
-    if !age.is_empty() {
-        p.text(Pos2::new(rect.right() - 12.0, rect.center().y), Align2::RIGHT_CENTER,
-               age, FontId::proportional(11.0), styles::TERTIARY);
-    }
-}
-
-fn separator(ui: &mut egui::Ui, full: f32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(full, 1.0), Sense::hover());
-    let line = Rect::from_min_max(
-        Pos2::new(rect.left() + 14.0, rect.center().y),
-        Pos2::new(rect.right() - 14.0, rect.center().y + 1.0),
-    );
-    ui.painter().rect_filled(line, Rounding::ZERO, styles::HAIRLINE);
-}
-
-fn footer(ui: &mut egui::Ui, sessions: &[Sess], full: f32) {
-    const KEYS: [&str; 4] = ["needs", "yourturn", "working", "done"];
-    const CHIP_W: f32 = 52.0;
-    let total = CHIP_W * KEYS.len() as f32;
-    ui.horizontal(|ui| {
-        ui.add_space(((full - total) / 2.0).max(0.0));
-        for key in KEYS {
-            let n = sessions.iter().filter(|s| s.state == key).count();
-            chip(ui, key, n);
-        }
+/// Push the current state to menu.html; it sizes itself, pops up at the cursor and shows.
+fn open_tray_menu(app: &tauri::AppHandle, x: f64, y: f64) {
+    let monitor = app.monitor_from_point(x, y).ok().flatten().map(|m| {
+        json!({
+            "x": m.position().x, "y": m.position().y,
+            "w": m.size().width, "h": m.size().height,
+        })
     });
+    let _ = app.emit_to(
+        "menu",
+        "menu-open",
+        json!({
+            "x": x,
+            "y": y,
+            "monitor": monitor,
+            "sessions": to_json(&model::load()),
+            "markers_missing": !install::claude_md_has_markers(),
+        }),
+    );
 }
 
-fn chip(ui: &mut egui::Ui, key: &str, n: usize) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(52.0, 18.0), Sense::hover());
-    let active = n > 0;
-    let col = if active { styles::color_for(key) } else { styles::TERTIARY };
-    let p = ui.painter();
-    p.circle_filled(Pos2::new(rect.left() + 8.0, rect.center().y), 5.5, col);
-    let tc = if active { styles::LABEL } else { styles::TERTIARY };
-    p.text(Pos2::new(rect.left() + 19.0, rect.center().y), Align2::LEFT_CENTER,
-           n.to_string(), FontId::proportional(11.5), tc);
-}
-
-// ---- helpers ----
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        return s.to_string();
+#[tauri::command]
+fn menu_action(app: tauri::AppHandle, id: String) {
+    match id.as_str() {
+        "toggle" => toggle_window(&app),
+        "markers" => {
+            let _ = install::append_claude_md_markers();
+        }
+        "quit" => app.exit(0),
+        _ => {}
     }
-    let cut: String = s.chars().take(n - 1).collect();
-    format!("{}…", cut.trim_end())
 }
 
-fn top_state(sessions: &[Sess]) -> (&'static str, i32) {
+fn update_tray(app: &tauri::AppHandle, sessions: &[model::Sess]) {
+    let Some(tray) = app.tray_by_id("main") else {
+        return;
+    };
     let now = model::now();
-    let active: Vec<&Sess> = sessions.iter().filter(|s| s.mute_until <= now).collect();
-    let count = |st: &str| active.iter().filter(|s| s.state == st).count() as i32;
+    let active: Vec<&model::Sess> = sessions.iter().filter(|s| s.mute_until <= now).collect();
+    let count = |st: &str| active.iter().filter(|s| s.state == st).count();
     let (needs, yt, wk) = (count("needs"), count("yourturn"), count("working"));
-    if needs > 0 {
+    let (top, n) = if needs > 0 {
         ("needs", needs)
     } else if yt > 0 {
         ("yourturn", yt)
@@ -308,13 +156,10 @@ fn top_state(sessions: &[Sess]) -> (&'static str, i32) {
         ("working", wk)
     } else {
         ("idle", 0)
-    }
-}
+    };
+    let _ = tray.set_icon(Some(badge_icon(top, n)));
 
-fn tooltip(sessions: &[Sess]) -> String {
-    let count = |st: &str| sessions.iter().filter(|s| s.state == st).count();
     let mut parts = Vec::new();
-    let (needs, yt, wk) = (count("needs"), count("yourturn"), count("working"));
     if needs > 0 {
         parts.push(format!("{needs} need you"));
     }
@@ -324,9 +169,78 @@ fn tooltip(sessions: &[Sess]) -> String {
     if wk > 0 {
         parts.push(format!("{wk} working"));
     }
-    if parts.is_empty() {
+    let tip = if parts.is_empty() {
         "Claude sessions — idle".into()
     } else {
         format!("Claude — {}", parts.join(", "))
+    };
+    let _ = tray.set_tooltip(Some(tip));
+}
+
+/// A 32×32 RGBA badge: a filled disc in the state colour (small + dim when nothing is active).
+fn badge_icon(state: &str, count: usize) -> tauri::image::Image<'static> {
+    const W: u32 = 32;
+    let (r, g, b) = styles::rgb_for(state);
+    let alpha_scale = if count == 0 { 0.6 } else { 1.0 };
+    let rad = if count == 0 { 6.0f32 } else { 13.0 };
+    let mut rgba = vec![0u8; (W * W * 4) as usize];
+    for y in 0..W {
+        for x in 0..W {
+            let (dx, dy) = (x as f32 + 0.5 - 16.0, y as f32 + 0.5 - 16.0);
+            let d = (dx * dx + dy * dy).sqrt();
+            let cover = (rad + 1.0 - d).clamp(0.0, 1.0);
+            let i = ((y * W + x) * 4) as usize;
+            rgba[i] = r;
+            rgba[i + 1] = g;
+            rgba[i + 2] = b;
+            rgba[i + 3] = (255.0 * cover * alpha_scale) as u8;
+        }
     }
+    tauri::image::Image::new_owned(rgba, W, W)
+}
+
+// ---- commands ----
+
+fn to_json(sessions: &[model::Sess]) -> Vec<Value> {
+    sessions
+        .iter()
+        .map(|s| {
+            json!({
+                "id": s.id,
+                "topic": s.topic,
+                "state": s.state,
+                "updated": s.updated,
+                "message": s.message,
+                "terminal": s.terminal,
+                "term_pid": s.term_pid,
+                "pid": s.pid,
+                "mute_until": s.mute_until,
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn load_sessions() -> Vec<Value> {
+    to_json(&model::load())
+}
+
+#[tauri::command]
+fn jump(terminal: String, term_pid: i64, pid: i64) {
+    platform::jump(&terminal, term_pid, pid);
+}
+
+#[tauri::command]
+fn new_session() {
+    platform::new_session();
+}
+
+#[tauri::command]
+fn toggle_mute(id: String) {
+    model::toggle_mute(&id);
+}
+
+#[tauri::command]
+fn rename(id: String, name: String) {
+    model::set_label(&id, &name);
 }
