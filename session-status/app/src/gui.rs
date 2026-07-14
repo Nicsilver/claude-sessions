@@ -26,6 +26,10 @@ pub fn run() -> tauri::Result<()> {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .invoke_handler(tauri::generate_handler![
             load_sessions,
             jump,
@@ -362,7 +366,8 @@ fn new_session_cmds() -> Vec<String> {
 }
 
 #[tauri::command]
-fn get_config() -> Value {
+fn get_config(app: tauri::AppHandle) -> Value {
+    use tauri_plugin_autostart::ManagerExt;
     let targets: Vec<Value> = terminals::spawn_targets()
         .into_iter()
         .map(|(id, label)| json!({ "id": id, "label": label }))
@@ -372,6 +377,8 @@ fn get_config() -> Value {
         "new_session_terminal": new_session_terminal(),
         "hotkey_jump": hotkey_jump(),
         "hotkey_new": hotkey_new(),
+        // OS state (HKCU Run / login item), not stored in config.json.
+        "autostart": app.autolaunch().is_enabled().unwrap_or(false),
         "terminals": targets,
     })
 }
@@ -383,7 +390,9 @@ fn set_config(
     new_session_terminal: String,
     hotkey_jump: String,
     hotkey_new: String,
+    autostart: bool,
 ) {
+    use tauri_plugin_autostart::ManagerExt;
     let path = crate::paths::config_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -399,6 +408,11 @@ fn set_config(
     let _ = std::fs::write(&path, serde_json::to_string_pretty(&root).unwrap_or_default());
     // Apply the new bindings immediately.
     register_hotkeys(&app);
+    // Launch-at-login is OS state — only touch it when the toggle actually changed.
+    let mgr = app.autolaunch();
+    if autostart != mgr.is_enabled().unwrap_or(false) {
+        let _ = if autostart { mgr.enable() } else { mgr.disable() };
+    }
 }
 
 #[tauri::command]

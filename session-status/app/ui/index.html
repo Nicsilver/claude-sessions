@@ -73,51 +73,69 @@
 
   #empty { text-align:center; padding:16px 0; font-size:12px; color:#6A6A6E; }
 
-  #settings { display:none; padding:8px 14px 10px; }
-  #settings label { display:block; font-size:11.5px; color:#ECECEC; margin-bottom:5px; }
-  #settings select {
-    width:100%; margin-bottom:9px; outline:none;
-    background:rgba(255,255,255,.06); color:#ECECEC;
-    border:1px solid rgba(255,255,255,.18); border-radius:6px;
-    padding:4px 6px; font-size:11.5px;
+  #settings { display:none; padding:6px 14px 12px; }
+  /* section header: hairline rule + small uppercase caption */
+  #settings .sec {
+    font-size:9px; font-weight:600; letter-spacing:.7px; text-transform:uppercase;
+    color:#6A6A6E; margin:0 0 8px; padding-top:11px;
+    border-top:1px solid rgba(255,255,255,.07);
   }
+  #settings .sec:first-child { padding-top:4px; border-top:none; }
+  #settings .field { margin-bottom:9px; }
+  #settings .field:last-child { margin-bottom:0; }
+  #settings label { display:block; font-size:11px; color:#98989E; margin-bottom:4px; }
+  #settings select, #settings textarea {
+    width:100%; outline:none; color:#ECECEC;
+    background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.15);
+    border-radius:7px; padding:6px 8px; font-size:11.5px;
+  }
+  #settings select { padding:5px 8px; }
   #settings select option { background:#2b2b2b; color:#ECECEC; }
   #settings textarea {
-    width:100%; resize:none; outline:none;
-    background:rgba(255,255,255,.06); color:#ECECEC;
-    border:1px solid rgba(255,255,255,.18); border-radius:6px;
-    padding:6px 8px; font:11.5px Consolas, monospace;
+    resize:none; line-height:1.5; font-family:Consolas, monospace;
     user-select:text; -webkit-user-select:text; cursor:text;
   }
-  #settings textarea:focus { border-color:rgba(255,255,255,.35); }
-  #settings .hint { font-size:10px; color:#98989E; margin-top:5px; line-height:1.5; }
-  #settings .hint code { color:#ECECEC; font-family:Consolas, monospace; }
-  #settings .hint kbd {
-    font:10px Consolas, monospace; color:#ECECEC; background:rgba(255,255,255,.1);
-    border:1px solid rgba(255,255,255,.18); border-radius:3px; padding:0 3px;
+  #settings select:focus, #settings textarea:focus, #settings .shortcut:focus {
+    border-color:rgba(255,255,255,.32);
   }
-  #settings .hkrow {
+  #settings .hint { font-size:10px; color:#8A8A8E; margin-top:6px; line-height:1.55; }
+  #settings .hint code { color:#ECECEC; font-family:Consolas, monospace; }
+  /* label-left / control-right row (shortcuts + toggles) */
+  #settings .row2 {
     display:flex; align-items:center; justify-content:space-between;
-    gap:8px; margin-top:6px; font-size:11.5px; color:#ECECEC;
+    gap:10px; min-height:28px; font-size:11.5px; color:#ECECEC;
   }
   #settings .shortcut {
-    min-width:96px; text-align:center; padding:4px 8px; cursor:pointer;
-    font:11.5px Consolas, monospace; color:#ECECEC;
-    background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.18);
-    border-radius:6px; outline:none; user-select:none; -webkit-user-select:none;
+    min-width:106px; text-align:center; padding:4px 10px; cursor:pointer;
+    font:11px Consolas, monospace; color:#ECECEC; letter-spacing:.3px;
+    background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.15);
+    border-radius:6px; outline:none;
   }
-  #settings .shortcut:hover { background:rgba(255,255,255,.1); }
-  #settings .shortcut.recording {
-    color:#98989E; border-color:rgba(52,199,89,.7); background:rgba(52,199,89,.1);
+  #settings .shortcut:hover { background:rgba(255,255,255,.1); border-color:rgba(255,255,255,.24); }
+  #settings .shortcut.recording { color:#9BE7AF; border-color:rgba(52,199,89,.7); background:rgba(52,199,89,.12); }
+  /* iOS-style toggle */
+  #settings .switch { position:relative; width:34px; height:20px; flex:none; cursor:pointer; }
+  #settings .switch input { position:absolute; opacity:0; width:0; height:0; }
+  #settings .switch .track {
+    position:absolute; inset:0; border-radius:10px; background:rgba(255,255,255,.16);
+    transition:background .16s ease;
   }
-  #settings .btnrow { display:flex; gap:8px; margin-top:9px; }
+  #settings .switch .track::before {
+    content:""; position:absolute; top:2px; left:2px; width:16px; height:16px;
+    border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.4);
+    transition:transform .16s ease;
+  }
+  #settings .switch input:checked + .track { background:#34C759; }
+  #settings .switch input:checked + .track::before { transform:translateX(14px); }
+  #settings .btnrow { display:flex; gap:8px; margin-top:14px; }
   #settings button {
-    flex:1; padding:5px 0; font:11.5px inherit; color:#ECECEC; cursor:pointer;
-    background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.18); border-radius:6px;
+    flex:1; padding:6px 0; font-size:11.5px; font-family:inherit; color:#ECECEC; cursor:pointer;
+    background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.16); border-radius:7px;
+    transition:background .12s ease;
   }
-  #settings button:hover { background:rgba(255,255,255,.14); }
-  #settings #save { background:rgba(52,199,89,.18); border-color:rgba(52,199,89,.4); }
-  #settings #save:hover { background:rgba(52,199,89,.3); }
+  #settings button:hover { background:rgba(255,255,255,.13); }
+  #settings #save { color:#fff; background:rgba(52,199,89,.22); border-color:rgba(52,199,89,.45); }
+  #settings #save:hover { background:rgba(52,199,89,.34); }
 
   #sep { height:1px; background:#333; margin:0 14px; }
 
@@ -147,24 +165,36 @@
   </header>
   <div id="list"></div>
   <div id="settings">
-    <label for="term">Open new sessions in</label>
-    <select id="term"></select>
-    <label for="cmd">New-session command</label>
-    <textarea id="cmd" rows="3" spellcheck="false"></textarea>
-    <div class="hint">Typed into the new terminal tab, one line per command — so your shell aliases work (e.g. <code>prog</code> then <code>c</code>).</div>
-    <label>Global shortcuts</label>
-    <div class="hkrow">
+    <div class="sec">New sessions</div>
+    <div class="field">
+      <label for="term">Open in</label>
+      <select id="term"></select>
+    </div>
+    <div class="field">
+      <label for="cmd">Launch command</label>
+      <textarea id="cmd" rows="2" spellcheck="false"></textarea>
+      <div class="hint">One line per command, typed into the new tab — shell aliases work (e.g. <code>prog</code> then <code>c</code>).</div>
+    </div>
+
+    <div class="sec">Global shortcuts</div>
+    <div class="row2">
       <span>Jump to top session</span>
       <div class="shortcut" id="hk-jump" tabindex="0" title="Click, then press a shortcut"></div>
     </div>
-    <div class="hkrow">
+    <div class="row2">
       <span>New session</span>
       <div class="shortcut" id="hk-new" tabindex="0" title="Click, then press a shortcut"></div>
     </div>
-    <div class="hint">Work from anywhere, even when the widget is hidden. Needs at least one modifier (Ctrl/Alt/Shift/⊞). <kbd>Esc</kbd> cancels.</div>
+
+    <div class="sec">Startup</div>
+    <div class="row2">
+      <span>Start at login</span>
+      <label class="switch"><input type="checkbox" id="autostart"><span class="track"></span></label>
+    </div>
+
     <div class="btnrow">
-      <button id="save">Save</button>
       <button id="cancel">Cancel</button>
+      <button id="save">Save</button>
     </div>
   </div>
   <div id="sep"></div>
@@ -353,6 +383,7 @@ document.getElementById("gear").addEventListener("click", () => {
     hkNew = c.hotkey_new || "";
     document.getElementById("hk-jump").textContent = fmtAccel(hkJump);
     document.getElementById("hk-new").textContent = fmtAccel(hkNew);
+    document.getElementById("autostart").checked = !!c.autostart;
     setSettingsOpen(true);
   });
 });
@@ -362,6 +393,7 @@ document.getElementById("save").addEventListener("click", () => {
     newSessionTerminal: document.getElementById("term").value,
     hotkeyJump: hkJump,
     hotkeyNew: hkNew,
+    autostart: document.getElementById("autostart").checked,
   }).then(() => setSettingsOpen(false));
 });
 document.getElementById("cancel").addEventListener("click", () => setSettingsOpen(false));

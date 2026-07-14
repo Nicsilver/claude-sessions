@@ -1,6 +1,6 @@
 [package]
 name = "claude-sessions"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "Claude Code session-status widget + hook recorder — one cross-platform binary (GUI, recorder, installer)"
 license = "AGPL-3.0"
@@ -20,6 +20,9 @@ tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 # Cross-platform global hotkeys (jump-to-top / new-session) — the Carbon RegisterEventHotKey
 # analog from menubar.swift, rebindable from the options pane.
 tauri-plugin-global-shortcut = "2"
+# Launch-at-login — HKCU Run on Windows (Startup.cs analog), login item on macOS (SMAppService
+# analog). One plugin for both, toggled from the options pane.
+tauri-plugin-autostart = "2"
 
 [target.'cfg(windows)'.dependencies]
 # Same 0.61 the tauri tree already compiles; used for UI Automation (WT per-tab focus).

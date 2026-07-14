@@ -40,11 +40,27 @@ Optionally, `claude-sessions markers` (or the tray menu) adds a small instructio
 | Middle-click | Mute it for an hour (sinks to the bottom) |
 | <kbd>Alt</kbd>-click | Rename it inline |
 | `+` / `×` | New Claude session / hide to tray |
-| Tray left-click | Show / hide the dashboard |
+| ⚙ | Options (terminal, shortcuts, startup) |
+| Tray left-click | Jump to the top session |
 | Tray right-click | Menu — with the live session list |
 
 <p align="center">
   <img src="docs/img/tray-menu.png" width="242" alt="The tray menu">
+</p>
+
+## Shortcuts & options
+
+Two **global hotkeys** — they work from anywhere, even with the dashboard hidden — rebindable in the options pane:
+
+| Shortcut | Action |
+|---|---|
+| <kbd>Ctrl/⌘</kbd> <kbd>Alt</kbd> <kbd>J</kbd> | Jump to the top session |
+| <kbd>Ctrl/⌘</kbd> <kbd>Alt</kbd> <kbd>N</kbd> | Start a new Claude session |
+
+Click the **⚙ gear** for options: which terminal new sessions open in and the command to launch them, rebind the two hotkeys, and toggle **Start at login**.
+
+<p align="center">
+  <img src="docs/img/settings.png" width="326" alt="The options pane">
 </p>
 
 ## What's in the repo
