@@ -87,7 +87,8 @@ fn toggle_window(app: &tauri::AppHandle) {
 
 // ---- tray ----
 
-/// Left-click toggles the dashboard; right-click opens our own webview-rendered menu (the
+/// Left-click jumps to the topmost (highest-priority) session, like the WPF tray did; the
+/// dashboard toggle lives in the menu. Right-click opens our own webview-rendered menu (the
 /// native Win32 tray menu can't be styled — same reason the WPF build had WpfTrayMenu.cs).
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     TrayIconBuilder::with_id("main")
@@ -97,7 +98,7 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             if let TrayIconEvent::Click { button, button_state: MouseButtonState::Up, position, .. } = ev
             {
                 match button {
-                    MouseButton::Left => toggle_window(tray.app_handle()),
+                    MouseButton::Left => jump_to_top(tray.app_handle()),
                     MouseButton::Right => open_tray_menu(tray.app_handle(), position.x, position.y),
                     _ => {}
                 }
@@ -105,6 +106,17 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         })
         .build(app)?;
     Ok(())
+}
+
+/// Jump to the first unmuted session — model::load() already sorts needs > your-turn > working,
+/// newest first. With nothing to jump to, fall back to toggling the dashboard.
+fn jump_to_top(app: &tauri::AppHandle) {
+    let sessions = model::load();
+    let now = model::now();
+    match sessions.iter().find(|s| !s.muted(now)) {
+        Some(s) => platform::jump(&s.terminal, s.term_pid, s.pid),
+        None => toggle_window(app),
+    }
 }
 
 /// Push the current state to menu.html; it sizes itself, pops up at the cursor and shows.
