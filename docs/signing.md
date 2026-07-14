@@ -39,8 +39,18 @@ Prerequisites the application checks:
 > colour-coded badge and count show which sessions are working, which are your turn,
 > and which need you, and a click jumps straight to the relevant terminal tab.
 
-**Reputation** — fill at apply-time with: GitHub star count, total release download
-count, and links to any external mentions (blog posts, Reddit, HN, etc.).
+**Reputation** — lead with claude-sessions' *own* metrics at apply-time (GitHub stars,
+total release download count from the Releases page, links to any external mentions).
+Then add maintainer background as supporting context, clearly framed as about the
+maintainer (not this project's usage):
+
+> Maintained by Nicolaj Jensen, a long-time open-source JetBrains plugin author.
+> For example, Jumper — a multi-line cursor-navigation plugin — has been on the
+> JetBrains Marketplace for ~5 years with ~5,000 downloads and 7 GitHub stars
+> (https://plugins.jetbrains.com/plugin/17449-jumper, https://github.com/Nicsilver/Jumper).
+
+Do NOT list Jumper's numbers as if they were claude-sessions' usage — reviewers can
+see this repo's stats directly. It's maintainer credibility, not project traction.
 
 Note: the form has a reCAPTCHA and two required consent checkboxes (Code of Conduct
 + personal-data processing) — complete those yourself at submit time.
