@@ -139,8 +139,10 @@ fn derive_label(sid: &str, reg: &Value, cwd: &str, transcript: &str) -> String {
     if let Some(c) = custom_label(sid) {
         return c;
     }
+    // Claude Code ≥2.1 auto-names every session ("fullstack-a4", nameSource "derived") —
+    // worthless as a label. Only honour registry names the user set (e.g. /rename).
     let reg_name = str_of(reg, "name");
-    if !reg_name.trim().is_empty() {
+    if !reg_name.trim().is_empty() && str_of(reg, "nameSource") != "derived" {
         return reg_name.trim().to_string();
     }
     let (title, latest) = transcript_titles(transcript);

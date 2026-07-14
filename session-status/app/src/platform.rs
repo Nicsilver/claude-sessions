@@ -344,11 +344,55 @@ mod imp {
         }
     }
 
-    pub fn annotate(rec: &mut Map<String, Value>, pid: i64, _transcript: &str, _topic: &str) {
-        rec.insert("tty".into(), json!(tty_of(pid)));
+    /// The IntelliJ terminal tab name for this tty (e.g. "TT AGI-18033"), published under
+    /// tab-names/ by the Claude Sessions IntelliJ plugin. Only real titles count: stock
+    /// ("Local", "Local (2)") and launcher-default ("claude") names are skipped, as are
+    /// entries not refreshed in the last 15s (leftovers from a closed project).
+    fn ide_tab_label(tty: &str) -> String {
+        let (mut best, mut best_ts) = (String::new(), 0.0f64);
+        if tty.is_empty() {
+            return best;
+        }
+        let Ok(entries) = std::fs::read_dir(crate::paths::tab_names_dir()) else { return best };
+        let now = crate::paths::unix_now();
+        for e in entries.flatten() {
+            let v = crate::paths::load_json(&e.path());
+            let Some(entry) = v.get(tty) else { continue };
+            let name = crate::paths::str_of(entry, "name").trim().to_string();
+            let ts = crate::paths::f64_of(entry, "ts");
+            if name.is_empty() || is_default_tab(&name) || now - ts > 15.0 || ts <= best_ts {
+                continue;
+            }
+            best = name;
+            best_ts = ts;
+        }
+        best
+    }
+
+    fn is_default_tab(name: &str) -> bool {
+        let base: String = name.chars().filter(|c| !c.is_whitespace()).collect();
+        base == "Local"
+            || (base.starts_with("Local(") && base.ends_with(')'))
+            || base.eq_ignore_ascii_case("claude")
+    }
+
+    /// Mirrors the Windows tab_title(): best display title for the session — the hosting
+    /// IDE's tab name, else the transcript's AI title, else the derived topic.
+    pub fn annotate(rec: &mut Map<String, Value>, pid: i64, transcript: &str, topic: &str) {
+        let tty = tty_of(pid);
         let (term, term_pid) = unix_terminal(pid);
+        let mut title =
+            if term == "jetbrains" { ide_tab_label(&tty) } else { String::new() };
+        if title.is_empty() {
+            title = crate::recorder::transcript_title(transcript);
+        }
+        if title.is_empty() {
+            title = topic.to_string();
+        }
+        rec.insert("tty".into(), json!(tty));
         rec.insert("terminal".into(), json!(term));
         rec.insert("term_pid".into(), json!(term_pid));
+        rec.insert("tab_title".into(), json!(title));
     }
 
     pub fn attach_parent_console() {} // unix CLIs already share the terminal's stdio
