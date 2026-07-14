@@ -1,5 +1,6 @@
 package com.nije.claudesessions
 
+import com.google.gson.Gson
 import com.google.gson.JsonParser
 import com.intellij.openapi.project.Project
 import org.jetbrains.plugins.terminal.TerminalToolWindowManager
@@ -15,7 +16,19 @@ import java.io.File
  *  renaming from it would freeze the loop on the first applied value. */
 object TabNamer {
     private val stateDir = File(System.getProperty("user.home"), ".claude/session-status/state")
-    private val applied = HashMap<String, String>()   // tty → name we last set
+    private val appliedFile =
+        File(System.getProperty("user.home"), ".claude/session-status/tab-names-applied.json")
+
+    /** tty → name we last set. Persisted so a restored tab (IDE restart keeps tab names but
+     *  wipes memory) is still recognised as ours and keeps following its session. */
+    private val applied: HashMap<String, String> = runCatching {
+        val o = JsonParser.parseString(appliedFile.readText()).asJsonObject
+        HashMap(o.entrySet().associate { it.key to it.value.asString })
+    }.getOrElse { HashMap() }
+
+    /** The name this object gave the tab on [tty], or null if the tab's name isn't ours —
+     *  lets the publisher flag auto names so the recorder won't echo them back as labels. */
+    fun appliedName(tty: String): String? = applied[tty]
 
     fun apply(project: Project) {
         val mgr = TerminalToolWindowManager.getInstance(project)
@@ -25,18 +38,32 @@ object TabNamer {
         if (topics.isEmpty()) return
         for (w in widgets) {
             val tty = TerminalJump.ttyOf(w)
-            val topic = topics[tty] ?: continue
+            val name = topics[tty]?.let(::shorten) ?: continue
             val content = runCatching { mgr.getContainer(w)?.content }.getOrNull() ?: continue
             val cur = content.displayName?.trim().orEmpty()
-            if (cur == topic) {
-                applied[tty] = topic
+            if (cur == name) {
+                remember(tty, name)
                 continue
             }
             if (isDefaultTab(cur) || cur == applied[tty]) {
-                runCatching { content.displayName = topic }
-                applied[tty] = topic
+                runCatching { content.displayName = name }
+                remember(tty, name)
             }
         }
+    }
+
+    private fun remember(tty: String, name: String) {
+        if (applied.put(tty, name) != name) {
+            runCatching { appliedFile.writeText(Gson().toJson(applied)) }
+        }
+    }
+
+    /** Tab-friendly length: word-boundary cut at [n] chars. */
+    private fun shorten(s: String, n: Int = 20): String {
+        if (s.length <= n) return s
+        val cut = s.take(n)
+        val head = cut.substringBeforeLast(' ').ifBlank { cut }
+        return head.trimEnd() + "…"
     }
 
     /** The stock titles a tab has when nobody named it. */

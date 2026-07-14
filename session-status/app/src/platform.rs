@@ -345,9 +345,10 @@ mod imp {
     }
 
     /// The IntelliJ terminal tab name for this tty (e.g. "TT AGI-18033"), published under
-    /// tab-names/ by the Claude Sessions IntelliJ plugin. Only real titles count: stock
-    /// ("Local", "Local (2)") and launcher-default ("claude") names are skipped, as are
-    /// entries not refreshed in the last 15s (leftovers from a closed project).
+    /// tab-names/ by the Claude Sessions IntelliJ plugin. Only titles a person chose count:
+    /// stock names ("Local", "Local (2)", "claude"), names the plugin's TabNamer applied
+    /// (auto = an echo of the session topic, one event stale), and entries not refreshed in
+    /// the last 15s (leftovers from a closed project) are all skipped.
     fn ide_tab_label(tty: &str) -> String {
         let (mut best, mut best_ts) = (String::new(), 0.0f64);
         if tty.is_empty() {
@@ -360,7 +361,8 @@ mod imp {
             let Some(entry) = v.get(tty) else { continue };
             let name = crate::paths::str_of(entry, "name").trim().to_string();
             let ts = crate::paths::f64_of(entry, "ts");
-            if name.is_empty() || is_default_tab(&name) || now - ts > 15.0 || ts <= best_ts {
+            let auto = entry.get("auto").and_then(Value::as_bool).unwrap_or(false);
+            if name.is_empty() || auto || is_default_tab(&name) || now - ts > 15.0 || ts <= best_ts {
                 continue;
             }
             best = name;

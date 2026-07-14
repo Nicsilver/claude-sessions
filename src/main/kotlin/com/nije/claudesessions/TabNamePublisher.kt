@@ -26,7 +26,11 @@ object TabNamePublisher {
             val tty = TerminalJump.ttyOf(w)
             if (tty.isEmpty()) continue
             val name = runCatching { mgr.getContainer(w)?.content?.displayName }.getOrNull()?.trim().orEmpty()
-            if (name.isNotEmpty()) map[tty] = mapOf("name" to name, "ts" to now)
+            // auto = the TabNamer set this name (an echo of the session topic, not a label
+            // the user chose) — the recorder skips auto names when deriving tab_title.
+            if (name.isNotEmpty()) {
+                map[tty] = mapOf("name" to name, "ts" to now, "auto" to (name == TabNamer.appliedName(tty)))
+            }
         }
         runCatching {
             dir.mkdirs()
