@@ -22,9 +22,13 @@ class FocusWatcher : ProjectActivity {
         var tick = 0
         while (true) {
             delay(100)   // was 400ms; tighter poll so a click registers near-instantly
-            // Every ~2s, republish this project's tty→tab-name map for the recorder.
+            // Every ~2s: name tabs after their sessions, then republish the tty→tab-name map
+            // for the recorder.
             if (tick++ % 20 == 0) {
-                ApplicationManager.getApplication().invokeLater { TabNamePublisher.publish(project) }
+                ApplicationManager.getApplication().invokeLater {
+                    TabNamer.apply(project)
+                    TabNamePublisher.publish(project)
+                }
             }
             val req = read(file) ?: continue
             if (req.ts <= lastTs) continue
