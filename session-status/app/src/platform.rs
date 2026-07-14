@@ -1,0 +1,311 @@
+//! Platform-specific bits: terminal/tty detection for the recorder, and window focus for the
+//! jump. Public surface is the same on both OSes: `parent_pid`, `annotate`, `jump`.
+
+use serde_json::{json, Map, Value};
+
+// ============================ Windows ============================
+#[cfg(windows)]
+mod imp {
+    use super::*;
+    use crate::recorder::transcript_title;
+    use std::collections::{HashMap, HashSet};
+    use windows_sys::Win32::Foundation::{CloseHandle, HWND, INVALID_HANDLE_VALUE, LPARAM, RECT};
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, FreeConsole, GetConsoleTitleW, ATTACH_PARENT_PROCESS,
+    };
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        AttachThreadInput, GetCurrentThreadId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetForegroundWindow, GetWindow, GetWindowRect, GetWindowTextLengthW,
+        GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow,
+        GW_OWNER, SW_RESTORE,
+    };
+
+    const JETBRAINS_EXES: &[&str] = &[
+        "idea64.exe", "idea.exe", "pycharm64.exe", "pycharm.exe", "webstorm64.exe",
+        "clion64.exe", "goland64.exe", "phpstorm64.exe", "rider64.exe", "rubymine64.exe",
+        "datagrip64.exe", "rustrover64.exe", "aqua64.exe", "fleet.exe",
+    ];
+
+    fn process_map() -> HashMap<i64, (i64, String)> {
+        let mut map = HashMap::new();
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snap == INVALID_HANDLE_VALUE {
+                return map;
+            }
+            let mut e: PROCESSENTRY32 = std::mem::zeroed();
+            e.dwSize = std::mem::size_of::<PROCESSENTRY32>() as u32;
+            if Process32First(snap, &mut e) != 0 {
+                loop {
+                    let name: String = e
+                        .szExeFile
+                        .iter()
+                        .take_while(|&&b| b != 0)
+                        .map(|&b| b as u8 as char)
+                        .collect::<String>()
+                        .to_lowercase();
+                    map.insert(e.th32ProcessID as i64, (e.th32ParentProcessID as i64, name));
+                    if Process32Next(snap, &mut e) == 0 {
+                        break;
+                    }
+                }
+            }
+            CloseHandle(snap);
+        }
+        map
+    }
+
+    pub fn parent_pid(pid: i64) -> i64 {
+        process_map().get(&pid).map(|(p, _)| *p).unwrap_or(0)
+    }
+
+    pub fn is_alive(pid: i64) -> bool {
+        if pid <= 0 {
+            return false;
+        }
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+            if h.is_null() {
+                return false;
+            }
+            CloseHandle(h);
+            true
+        }
+    }
+
+    fn win_terminal(start: i64) -> (String, i64) {
+        let pmap = process_map();
+        let mut chain: Vec<(i64, String)> = Vec::new();
+        let (mut pid, mut seen) = (start, HashSet::new());
+        for _ in 0..30 {
+            if seen.contains(&pid) {
+                break;
+            }
+            let Some((ppid, name)) = pmap.get(&pid) else { break };
+            seen.insert(pid);
+            chain.push((pid, name.clone()));
+            pid = *ppid;
+        }
+        for (p, n) in &chain {
+            if n == "windowsterminal.exe" {
+                return ("wt".into(), *p);
+            }
+        }
+        for (p, n) in &chain {
+            if JETBRAINS_EXES.contains(&n.as_str()) {
+                return ("jetbrains".into(), *p);
+            }
+        }
+        for (p, n) in &chain {
+            if n == "code.exe" {
+                return ("vscode".into(), *p);
+            }
+        }
+        for (p, n) in &chain {
+            if n == "conhost.exe" || n == "openconsole.exe" {
+                return ("console".into(), *p);
+            }
+        }
+        ("other".into(), chain.first().map(|(p, _)| *p).unwrap_or(start))
+    }
+
+    fn console_title() -> String {
+        unsafe {
+            let attached = AttachConsole(ATTACH_PARENT_PROCESS) != 0;
+            let mut buf = [0u16; 1024];
+            GetConsoleTitleW(buf.as_mut_ptr(), buf.len() as u32);
+            if attached {
+                FreeConsole();
+            }
+            let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            let t = String::from_utf16_lossy(&buf[..end]).trim().to_string();
+            let low = t.to_lowercase();
+            if t.is_empty()
+                || low.contains(".exe")
+                || low.ends_with("bash")
+                || low.ends_with("pwsh")
+                || low.ends_with("cmd")
+                || low.ends_with("powershell")
+            {
+                String::new()
+            } else {
+                t
+            }
+        }
+    }
+
+    fn tab_title(transcript: &str, topic: &str) -> String {
+        let ct = console_title();
+        if !ct.is_empty() {
+            return ct;
+        }
+        let title = transcript_title(transcript);
+        if title.is_empty() {
+            topic.to_string()
+        } else {
+            title
+        }
+    }
+
+    pub fn annotate(rec: &mut Map<String, Value>, pid: i64, transcript: &str, topic: &str) {
+        rec.insert("tty".into(), json!(""));
+        let (term, term_pid) = win_terminal(pid);
+        rec.insert("terminal".into(), json!(term));
+        rec.insert("term_pid".into(), json!(term_pid));
+        rec.insert("tab_title".into(), json!(tab_title(transcript, topic)));
+    }
+
+    // ---- window focus (jump) ----
+
+    #[repr(C)]
+    struct Find {
+        pid: u32,
+        best: HWND,
+        best_area: i64,
+    }
+
+    unsafe extern "system" fn enum_proc(h: HWND, l: LPARAM) -> i32 {
+        let ctx = &mut *(l as *mut Find);
+        let mut wpid: u32 = 0;
+        GetWindowThreadProcessId(h, &mut wpid);
+        if wpid != ctx.pid {
+            return 1;
+        }
+        if IsWindowVisible(h) == 0 {
+            return 1;
+        }
+        if !GetWindow(h, GW_OWNER).is_null() {
+            return 1; // owned/tool popup
+        }
+        if GetWindowTextLengthW(h) == 0 {
+            return 1; // untitled shell
+        }
+        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        GetWindowRect(h, &mut r);
+        let area = (r.right - r.left).max(0) as i64 * (r.bottom - r.top).max(0) as i64;
+        if area > ctx.best_area {
+            ctx.best_area = area;
+            ctx.best = h;
+        }
+        1
+    }
+
+    fn main_window_for_pid(pid: i64) -> HWND {
+        let mut ctx = Find { pid: pid as u32, best: std::ptr::null_mut(), best_area: -1 };
+        unsafe {
+            EnumWindows(Some(enum_proc), &mut ctx as *mut _ as LPARAM);
+        }
+        ctx.best
+    }
+
+    fn focus_window(h: HWND) -> bool {
+        if h.is_null() {
+            return false;
+        }
+        unsafe {
+            if IsIconic(h) != 0 {
+                ShowWindow(h, SW_RESTORE);
+            }
+            let fg = GetForegroundWindow();
+            let mut tmp = 0u32;
+            let fg_thread = GetWindowThreadProcessId(fg, &mut tmp);
+            let our = GetCurrentThreadId();
+            let target = GetWindowThreadProcessId(h, &mut tmp);
+            AttachThreadInput(our, fg_thread, 1);
+            AttachThreadInput(target, fg_thread, 1);
+            let ok = SetForegroundWindow(h) != 0;
+            AttachThreadInput(target, fg_thread, 0);
+            AttachThreadInput(our, fg_thread, 0);
+            ok
+        }
+    }
+
+    pub fn jump(terminal: &str, term_pid: i64, pid: i64) {
+        if terminal == "jetbrains" {
+            return; // handled by the IDE plugin via the request file (future)
+        }
+        let p = if term_pid > 0 { term_pid } else { pid };
+        if p <= 0 {
+            return;
+        }
+        // NOTE: Windows Terminal per-tab focus via UI Automation (WtTabs.cs) is not yet ported;
+        // this focuses the terminal window. Tab-precise focus is a follow-up.
+        let h = main_window_for_pid(p);
+        focus_window(h);
+    }
+
+    pub fn new_session() {
+        // MVP: open a new Windows Terminal tab in the current window. The full behaviour (focus WT,
+        // Ctrl+Shift+T, type the claude command) from Interop.cs is a follow-up.
+        let _ = std::process::Command::new("wt").args(["-w", "0", "new-tab"]).spawn();
+    }
+
+    /// Attach to the launching console so CLI subcommand output (install/uninstall/markers) is
+    /// visible — release builds use the windows subsystem, which detaches stdio.
+    pub fn attach_parent_console() {
+        unsafe {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
+
+}
+
+// ============================ Unix (macOS) ============================
+#[cfg(unix)]
+mod imp {
+    use super::*;
+
+    pub fn parent_pid(_pid: i64) -> i64 {
+        unsafe { libc::getppid() as i64 }
+    }
+
+    pub fn is_alive(pid: i64) -> bool {
+        if pid <= 0 {
+            return false;
+        }
+        unsafe {
+            if libc::kill(pid as i32, 0) == 0 {
+                true
+            } else {
+                std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+            }
+        }
+    }
+
+    fn tty_of(pid: i64) -> String {
+        if let Ok(o) = std::process::Command::new("ps")
+            .args(["-o", "tty=", "-p", &pid.to_string()])
+            .output()
+        {
+            let t = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if t.is_empty() || t == "??" || t == "?" {
+                String::new()
+            } else {
+                t
+            }
+        } else {
+            String::new()
+        }
+    }
+
+    pub fn annotate(rec: &mut Map<String, Value>, pid: i64, _transcript: &str, _topic: &str) {
+        rec.insert("tty".into(), json!(tty_of(pid)));
+    }
+
+    pub fn jump(_terminal: &str, _term_pid: i64, _pid: i64) {
+        // TODO(mac): focus the owning terminal via the AX API / tty. Not yet ported.
+    }
+
+    pub fn new_session() {
+        // TODO(mac): open a new terminal tab. Not yet ported.
+    }
+
+    pub fn attach_parent_console() {} // unix CLIs already share the terminal's stdio
+}
+
+pub use imp::{annotate, attach_parent_console, is_alive, jump, new_session, parent_pid};
