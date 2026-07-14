@@ -20,6 +20,7 @@ public sealed class Tray : IDisposable
     private nint _lastHIcon;
     private HashSet<string> _prevNeeds = new();
     private Sess? _balloonTarget;
+    private readonly WpfTrayMenu _menu = new();
 
     [DllImport("user32.dll")] private static extern bool DestroyIcon(nint handle);
 
@@ -34,6 +35,10 @@ public sealed class Tray : IDisposable
             {
                 var top = _sessions.FirstOrDefault();
                 if (top is not null) _jump(top);       // left-click → jump to the top session
+            }
+            else if (e.Button == WF.MouseButtons.Right)
+            {
+                ShowMenu();                             // right-click → show the session menu
             }
         };
         _icon.BalloonTipClicked += (_, _) => { if (_balloonTarget is not null) _jump(_balloonTarget); };
@@ -62,7 +67,9 @@ public sealed class Tray : IDisposable
         if (sig != _iconSig) { _iconSig = sig; SetIcon(top, count); }
 
         _icon.Text = Tooltip(sessions);
-        RebuildMenu();
+        // Note: the menu is NOT rebuilt here. The refresh runs every ~1.5s, and disposing/rebuilding
+        // the ContextMenuStrip while it's open would close it out from under the user. Instead the
+        // menu is built fresh on right-click (ShowMenu), so it always reflects the current sessions.
         NotifyNeeds(sessions, now);
     }
 
@@ -96,40 +103,40 @@ public sealed class Tray : IDisposable
 
     // ---- right-click menu ----
 
-    private void RebuildMenu()
+    /// Build a fresh WPF ContextMenu of the current sessions and show it at the cursor. Built on
+    /// demand (not on the 1.5s refresh) so a refresh tick can't dispose it out from under the user,
+    /// and rendered with WPF — real rounded corners, shadow and hover — instead of the flat gray
+    /// WinForms ToolStripMenu.
+    private void ShowMenu()
     {
-        var menu = new WF.ContextMenuStrip { ShowImageMargin = true };
+        var menu = _menu.NewMenu();
         if (_sessions.Count == 0)
         {
-            menu.Items.Add(new WF.ToolStripMenuItem("No active sessions") { Enabled = false });
+            _menu.AddItem(menu, "No active sessions", null, () => { }, enabled: false);
         }
         else
         {
             foreach (var s in _sessions)
             {
                 var age = Styles.AgeStr(s.Updated);
-                var text = age.Length > 0 ? $"{s.Topic}   ·  {age}" : s.Topic;
-                var item = new WF.ToolStripMenuItem(text) { Image = Swatch(Styles.ColorFor(s.State)) };
+                var name = Trunc(s.Topic, 30);   // keep long topics from stretching the menu
+                var text = age.Length > 0 ? $"{name}   ·  {age}" : name;
                 var captured = s;
-                item.Click += (_, _) => _jump(captured);
-                menu.Items.Add(item);
+                _menu.AddItem(menu, text, Styles.ColorFor(s.State), () => _jump(captured));
             }
         }
-        menu.Items.Add(new WF.ToolStripSeparator());
-        var showItem = new WF.ToolStripMenuItem("Show / hide dashboard");
-        showItem.Click += (_, _) => _toggleDashboard();
-        menu.Items.Add(showItem);
-        var newItem = new WF.ToolStripMenuItem("New Claude session");
-        newItem.Click += (_, _) => _newSession();
-        menu.Items.Add(newItem);
-        menu.Items.Add(new WF.ToolStripSeparator());
-        var quitItem = new WF.ToolStripMenuItem("Quit");
-        quitItem.Click += (_, _) => _quit();
-        menu.Items.Add(quitItem);
+        _menu.AddSeparator(menu);
+        _menu.AddItem(menu, "Show / hide dashboard", null, _toggleDashboard);
+        _menu.AddItem(menu, "New Claude session", null, _newSession);
+        _menu.AddSeparator(menu);
+        _menu.AddItem(menu, "Quit", null, _quit);
 
-        _icon.ContextMenuStrip?.Dispose();
-        _icon.ContextMenuStrip = menu;
+        _menu.Show(menu);
     }
+
+    /// Clip an over-long topic to `max` chars with an ellipsis so the menu stays a sane width.
+    private static string Trunc(string s, int max) =>
+        s.Length <= max ? s : s[..(max - 1)].TrimEnd() + "…";
 
     private static void RoundRect(D.Drawing2D.GraphicsPath p, float x, float y, float w, float h, float r)
     {
@@ -139,17 +146,6 @@ public sealed class Tray : IDisposable
         p.AddArc(x + w - d, y + h - d, d, d, 0, 90);
         p.AddArc(x, y + h - d, d, d, 90, 90);
         p.CloseFigure();
-    }
-
-    private static D.Bitmap Swatch(System.Windows.Media.Color wpf)
-    {
-        var bmp = new D.Bitmap(12, 12);
-        using var g = D.Graphics.FromImage(bmp);
-        g.SmoothingMode = D.Drawing2D.SmoothingMode.AntiAlias;
-        g.Clear(D.Color.Transparent);
-        using var b = new D.SolidBrush(D.Color.FromArgb(wpf.A, wpf.R, wpf.G, wpf.B));
-        g.FillEllipse(b, 1, 1, 10, 10);
-        return bmp;
     }
 
     // ---- dynamic badge icon ----
@@ -202,7 +198,7 @@ public sealed class Tray : IDisposable
     public void Dispose()
     {
         _icon.Visible = false;
-        _icon.ContextMenuStrip?.Dispose();
+        _menu.Dispose();
         _icon.Dispose();
         if (_lastHIcon != 0) DestroyIcon(_lastHIcon);
     }
