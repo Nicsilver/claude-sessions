@@ -3,7 +3,7 @@
 //! ui/index.html; this module is the shell: window placement, tray, hook auto-install, the
 //! 1.5s heartbeat that pushes sessions to the frontend, and the commands the frontend invokes.
 
-use crate::{install, model, platform, styles};
+use crate::{install, model, styles, terminals};
 use serde_json::{json, Value};
 use std::time::Duration;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -119,9 +119,7 @@ fn jump_to_top(app: &tauri::AppHandle) {
     match sessions.iter().find(|s| !s.muted(now)) {
         Some(s) => {
             let s = s.clone();
-            std::thread::spawn(move || {
-                platform::jump(&s.terminal, s.term_pid, s.pid, &s.tab_title, &s.topic)
-            });
+            std::thread::spawn(move || terminals::focus(&s));
         }
         None => toggle_window(app),
     }
@@ -246,36 +244,53 @@ fn load_sessions() -> Vec<Value> {
     to_json(&model::load())
 }
 
-// The jump/close/new-session actions sleep between focus and keystrokes, so they run on their
-// own threads rather than blocking a command handler.
+// The jump/close/new-session actions can sleep between focus and keystrokes, so they run on
+// their own threads rather than blocking a command handler. They take the session id and
+// re-load state, so the frontend never carries terminal internals.
 
-#[tauri::command]
-fn jump(terminal: String, term_pid: i64, pid: i64, tab_title: String, topic: String) {
-    std::thread::spawn(move || platform::jump(&terminal, term_pid, pid, &tab_title, &topic));
-}
-
-#[tauri::command]
-fn close_session(terminal: String, term_pid: i64, pid: i64, tab_title: String, topic: String) {
+fn with_session(id: String, f: impl Fn(&model::Sess) + Send + 'static) {
     std::thread::spawn(move || {
-        platform::close_session(&terminal, term_pid, pid, &tab_title, &topic)
+        if let Some(s) = model::load().into_iter().find(|s| s.id == id) {
+            f(&s);
+        }
     });
 }
 
 #[tauri::command]
+fn jump(id: String) {
+    with_session(id, terminals::focus);
+}
+
+#[tauri::command]
+fn close_session(id: String) {
+    with_session(id, terminals::close);
+}
+
+#[tauri::command]
 fn new_session() {
-    let cmds = new_session_cmds();
-    std::thread::spawn(move || platform::new_session(&cmds));
+    let (target, cmds) = (new_session_terminal(), new_session_cmds());
+    std::thread::spawn(move || terminals::new_session(&target, &cmds));
 }
 
 // ---- options (config.json in ~/.claude/session-status/) ----
 
-fn new_session_cmd_raw() -> String {
+fn config_str(key: &str, default: &str) -> String {
     crate::paths::load_json(&crate::paths::config_path())
-        .get("new_session_cmd")
+        .get(key)
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or("claude")
+        .unwrap_or(default)
         .to_string()
+}
+
+fn new_session_cmd_raw() -> String {
+    config_str("new_session_cmd", "claude")
+}
+
+/// Which terminal `+` opens new sessions in; defaults to the platform's first adapter.
+fn new_session_terminal() -> String {
+    let default = terminals::spawn_targets().first().map_or("", |(id, _)| id);
+    config_str("new_session_terminal", default)
 }
 
 /// The configured launch command(s), one per line — typed into the new tab in order.
@@ -290,11 +305,19 @@ fn new_session_cmds() -> Vec<String> {
 
 #[tauri::command]
 fn get_config() -> Value {
-    json!({ "new_session_cmd": new_session_cmd_raw() })
+    let targets: Vec<Value> = terminals::spawn_targets()
+        .into_iter()
+        .map(|(id, label)| json!({ "id": id, "label": label }))
+        .collect();
+    json!({
+        "new_session_cmd": new_session_cmd_raw(),
+        "new_session_terminal": new_session_terminal(),
+        "terminals": targets,
+    })
 }
 
 #[tauri::command]
-fn set_config(new_session_cmd: String) {
+fn set_config(new_session_cmd: String, new_session_terminal: String) {
     let path = crate::paths::config_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -304,6 +327,7 @@ fn set_config(new_session_cmd: String) {
         root = json!({});
     }
     root["new_session_cmd"] = json!(new_session_cmd.trim());
+    root["new_session_terminal"] = json!(new_session_terminal.trim());
     let _ = std::fs::write(&path, serde_json::to_string_pretty(&root).unwrap_or_default());
 }
 

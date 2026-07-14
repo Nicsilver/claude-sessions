@@ -17,6 +17,7 @@ pub struct Sess {
     pub term_pid: i64,
     pub pid: i64,
     pub tab_title: String,
+    pub tty: String, // mac only; the IntelliJ plugin matches focus requests by tty
     pub mute_until: f64,
 }
 
@@ -81,6 +82,7 @@ pub fn load() -> Vec<Sess> {
             term_pid,
             pid,
             tab_title,
+            tty: str_of(&root, "tty"),
             mute_until: mutes.get(&id).copied().unwrap_or(0.0),
         });
     }

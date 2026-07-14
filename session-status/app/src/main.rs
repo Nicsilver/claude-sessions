@@ -11,6 +11,7 @@ mod paths;
 mod platform;
 mod recorder;
 mod styles;
+mod terminals;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -37,7 +38,7 @@ fn main() {
             let id = args.get(1).cloned().unwrap_or_default();
             match model::load().into_iter().find(|s| s.id.starts_with(&id)) {
                 Some(s) => {
-                    platform::jump(&s.terminal, s.term_pid, s.pid, &s.tab_title, &s.topic);
+                    terminals::focus(&s);
                     std::process::exit(0)
                 }
                 None => {
