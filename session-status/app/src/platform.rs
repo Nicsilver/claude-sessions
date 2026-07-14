@@ -382,7 +382,10 @@ mod imp {
     /// IDE's tab name, else the transcript's AI title, else the derived topic.
     pub fn annotate(rec: &mut Map<String, Value>, pid: i64, transcript: &str, topic: &str) {
         let tty = tty_of(pid);
-        let (term, term_pid) = unix_terminal(pid);
+        // No controlling tty = headless (the IDE plugin's background ACP agent, SDK
+        // callers) — leave it untagged so the widget hides it, like the Swift surface did.
+        let (term, term_pid) =
+            if tty.is_empty() { (String::new(), 0) } else { unix_terminal(pid) };
         let mut title =
             if term == "jetbrains" { ide_tab_label(&tty) } else { String::new() };
         if title.is_empty() {
