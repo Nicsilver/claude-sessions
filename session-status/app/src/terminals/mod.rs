@@ -6,6 +6,8 @@
 use crate::model::Sess;
 
 mod jetbrains;
+#[cfg(target_os = "macos")]
+mod macos_terminal;
 #[cfg(windows)]
 mod wt;
 
@@ -28,7 +30,12 @@ fn registry() -> &'static [&'static dyn Terminal] {
     {
         &[&wt::Wt, &jetbrains::JetBrains]
     }
-    #[cfg(unix)]
+    // jetbrains first: it is the default "open new sessions in" target on mac.
+    #[cfg(target_os = "macos")]
+    {
+        &[&jetbrains::JetBrains, &macos_terminal::MacTerminal]
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         &[&jetbrains::JetBrains]
     }
