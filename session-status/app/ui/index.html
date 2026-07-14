@@ -73,6 +73,27 @@
 
   #empty { text-align:center; padding:16px 0; font-size:12px; color:#6A6A6E; }
 
+  #settings { display:none; padding:8px 14px 10px; }
+  #settings label { display:block; font-size:11.5px; color:#ECECEC; margin-bottom:5px; }
+  #settings textarea {
+    width:100%; resize:none; outline:none;
+    background:rgba(255,255,255,.06); color:#ECECEC;
+    border:1px solid rgba(255,255,255,.18); border-radius:6px;
+    padding:6px 8px; font:11.5px Consolas, monospace;
+    user-select:text; -webkit-user-select:text; cursor:text;
+  }
+  #settings textarea:focus { border-color:rgba(255,255,255,.35); }
+  #settings .hint { font-size:10px; color:#98989E; margin-top:5px; line-height:1.5; }
+  #settings .hint code { color:#ECECEC; font-family:Consolas, monospace; }
+  #settings .btnrow { display:flex; gap:8px; margin-top:9px; }
+  #settings button {
+    flex:1; padding:5px 0; font:11.5px inherit; color:#ECECEC; cursor:pointer;
+    background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.18); border-radius:6px;
+  }
+  #settings button:hover { background:rgba(255,255,255,.14); }
+  #settings #save { background:rgba(52,199,89,.18); border-color:rgba(52,199,89,.4); }
+  #settings #save:hover { background:rgba(52,199,89,.3); }
+
   #sep { height:1px; background:#333; margin:0 14px; }
 
   footer { display:flex; justify-content:center; gap:14px; padding:7px 0 9px; }
@@ -90,10 +111,21 @@
 <div id="panel">
   <header data-tauri-drag-region>
     <div class="disc" id="close" title="Hide to tray">&times;</div>
+    <div style="width:18px"></div><!-- balances the gear so the title stays centered -->
     <div class="title" data-tauri-drag-region>Claude sessions</div>
+    <div class="disc" id="gear" title="Options">&#9881;</div>
     <div class="disc" id="plus" title="New Claude session">+</div>
   </header>
   <div id="list"></div>
+  <div id="settings">
+    <label for="cmd">New-session command</label>
+    <textarea id="cmd" rows="3" spellcheck="false"></textarea>
+    <div class="hint">Typed into the new terminal tab, one line per command — so your shell aliases work (e.g. <code>prog</code> then <code>c</code>).</div>
+    <div class="btnrow">
+      <button id="save">Save</button>
+      <button id="cancel">Cancel</button>
+    </div>
+  </div>
   <div id="sep"></div>
   <footer data-tauri-drag-region id="chips"></footer>
 </div>
@@ -116,7 +148,13 @@ const rgb = s => COLORS[s] || COLORS.idle;
 
 let sessions = [];
 let renaming = null;   // session id currently being renamed inline
+let settingsOpen = false;
 let lastH = 0;
+
+function jumpArgs(s) {
+  return { terminal: s.terminal, termPid: s.term_pid, pid: s.pid,
+           tabTitle: s.tab_title || "", topic: s.topic || "" };
+}
 
 function ageStr(ts) {
   if (!ts) return "";
@@ -137,6 +175,7 @@ function metaFor(s) {
 }
 
 function render() {
+  if (settingsOpen) return;
   const list = document.getElementById("list");
   list.innerHTML = "";
   if (!sessions.length) {
@@ -194,10 +233,15 @@ function render() {
     row.addEventListener("click", e => {
       if (renaming) return;
       if (e.altKey) { renaming = s.id; render(); return; }
-      invoke("jump", { terminal: s.terminal, termPid: s.term_pid, pid: s.pid });
+      invoke("jump", jumpArgs(s));
     });
     row.addEventListener("auxclick", e => {           // middle-click → mute 1h
       if (e.button === 1) invoke("toggle_mute", { id: s.id }).then(refresh);
+    });
+    row.addEventListener("contextmenu", e => {        // right-click → close the session
+      e.preventDefault();
+      invoke("close_session", jumpArgs(s));
+      setTimeout(refresh, 600);
     });
     list.appendChild(row);
   }
@@ -241,6 +285,27 @@ function refresh() { invoke("load_sessions").then(s => { sessions = s; render();
 document.getElementById("close").addEventListener("click", () => appWindow.hide());
 document.getElementById("plus").addEventListener("click", () => invoke("new_session"));
 document.addEventListener("contextmenu", e => e.preventDefault());
+
+// ---- options pane (gear) ----
+function setSettingsOpen(open) {
+  settingsOpen = open;
+  document.getElementById("settings").style.display = open ? "block" : "none";
+  document.getElementById("list").style.display = open ? "none" : "block";
+  if (!open) render();
+  fitHeight();
+}
+document.getElementById("gear").addEventListener("click", () => {
+  if (settingsOpen) { setSettingsOpen(false); return; }
+  invoke("get_config").then(c => {
+    document.getElementById("cmd").value = c.new_session_cmd;
+    setSettingsOpen(true);
+  });
+});
+document.getElementById("save").addEventListener("click", () => {
+  invoke("set_config", { newSessionCmd: document.getElementById("cmd").value })
+    .then(() => setSettingsOpen(false));
+});
+document.getElementById("cancel").addEventListener("click", () => setSettingsOpen(false));
 
 listen("sessions", e => { sessions = e.payload; render(); });
 setInterval(() => {                                   // tick ages between pushes

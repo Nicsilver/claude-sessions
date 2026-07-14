@@ -31,6 +31,21 @@ fn main() {
             platform::attach_parent_console();
             std::process::exit(install::run(false))
         }
+        // Diagnostic: jump to a session (id prefix match) exactly like clicking its row.
+        Some("focus") => {
+            platform::attach_parent_console();
+            let id = args.get(1).cloned().unwrap_or_default();
+            match model::load().into_iter().find(|s| s.id.starts_with(&id)) {
+                Some(s) => {
+                    platform::jump(&s.terminal, s.term_pid, s.pid, &s.tab_title, &s.topic);
+                    std::process::exit(0)
+                }
+                None => {
+                    eprintln!("no live session matching '{id}'");
+                    std::process::exit(1)
+                }
+            }
+        }
         // Append the optional ⏳/✅ turn-marker instruction to the global CLAUDE.md.
         Some("markers") => {
             platform::attach_parent_console();

@@ -28,10 +28,13 @@ pub fn run() -> tauri::Result<()> {
         .invoke_handler(tauri::generate_handler![
             load_sessions,
             jump,
+            close_session,
             new_session,
             toggle_mute,
             rename,
-            menu_action
+            menu_action,
+            get_config,
+            set_config
         ])
         .setup(|app| {
             setup_tray(app.handle())?;
@@ -114,7 +117,12 @@ fn jump_to_top(app: &tauri::AppHandle) {
     let sessions = model::load();
     let now = model::now();
     match sessions.iter().find(|s| !s.muted(now)) {
-        Some(s) => platform::jump(&s.terminal, s.term_pid, s.pid),
+        Some(s) => {
+            let s = s.clone();
+            std::thread::spawn(move || {
+                platform::jump(&s.terminal, s.term_pid, s.pid, &s.tab_title, &s.topic)
+            });
+        }
         None => toggle_window(app),
     }
 }
@@ -226,6 +234,7 @@ fn to_json(sessions: &[model::Sess]) -> Vec<Value> {
                 "terminal": s.terminal,
                 "term_pid": s.term_pid,
                 "pid": s.pid,
+                "tab_title": s.tab_title,
                 "mute_until": s.mute_until,
             })
         })
@@ -237,14 +246,65 @@ fn load_sessions() -> Vec<Value> {
     to_json(&model::load())
 }
 
+// The jump/close/new-session actions sleep between focus and keystrokes, so they run on their
+// own threads rather than blocking a command handler.
+
 #[tauri::command]
-fn jump(terminal: String, term_pid: i64, pid: i64) {
-    platform::jump(&terminal, term_pid, pid);
+fn jump(terminal: String, term_pid: i64, pid: i64, tab_title: String, topic: String) {
+    std::thread::spawn(move || platform::jump(&terminal, term_pid, pid, &tab_title, &topic));
+}
+
+#[tauri::command]
+fn close_session(terminal: String, term_pid: i64, pid: i64, tab_title: String, topic: String) {
+    std::thread::spawn(move || {
+        platform::close_session(&terminal, term_pid, pid, &tab_title, &topic)
+    });
 }
 
 #[tauri::command]
 fn new_session() {
-    platform::new_session();
+    let cmds = new_session_cmds();
+    std::thread::spawn(move || platform::new_session(&cmds));
+}
+
+// ---- options (config.json in ~/.claude/session-status/) ----
+
+fn new_session_cmd_raw() -> String {
+    crate::paths::load_json(&crate::paths::config_path())
+        .get("new_session_cmd")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("claude")
+        .to_string()
+}
+
+/// The configured launch command(s), one per line — typed into the new tab in order.
+fn new_session_cmds() -> Vec<String> {
+    new_session_cmd_raw()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+#[tauri::command]
+fn get_config() -> Value {
+    json!({ "new_session_cmd": new_session_cmd_raw() })
+}
+
+#[tauri::command]
+fn set_config(new_session_cmd: String) {
+    let path = crate::paths::config_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let mut root = crate::paths::load_json(&path);
+    if !root.is_object() {
+        root = json!({});
+    }
+    root["new_session_cmd"] = json!(new_session_cmd.trim());
+    let _ = std::fs::write(&path, serde_json::to_string_pretty(&root).unwrap_or_default());
 }
 
 #[tauri::command]

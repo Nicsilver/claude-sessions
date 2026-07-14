@@ -76,7 +76,8 @@ async function open(payload) {
   for (const s of payload.sessions) {
     panel.appendChild(item(s.topic, {
       dot: COLORS[s.state] || COLORS.idle,
-      onclick: () => invoke("jump", { terminal: s.terminal, termPid: s.term_pid, pid: s.pid }),
+      onclick: () => invoke("jump", { terminal: s.terminal, termPid: s.term_pid, pid: s.pid,
+                                      tabTitle: s.tab_title || "", topic: s.topic || "" }),
     }));
   }
   panel.appendChild(sep());
