@@ -56,12 +56,13 @@ def main():
     reg = registry_for(sid)
     cwd = (reg.get("cwd") if reg else None) or data.get("cwd") or prev.get("cwd") or os.getcwd()
     pid = (reg.get("pid") if reg else None) or os.getppid()
+    tty = tty_of(pid)
     transcript = data.get("transcript_path")
     topic = prev.get("topic")
     # Recompute the label on meaningful events (name/title/prompt can appear or change), or
-    # whenever a custom rename exists (so it applies promptly); reuse the cache otherwise.
-    if custom_label(sid) or not topic or state in ("start", "done") or (state == "working" and data.get("prompt")):
-        topic = derive_label(sid, reg, cwd, transcript) or topic
+    # whenever a custom rename or IDE tab name exists (so it applies promptly); reuse otherwise.
+    if custom_label(sid) or tab_label(tty) or not topic or state in ("start", "done") or (state == "working" and data.get("prompt")):
+        topic = derive_label(sid, reg, cwd, transcript, tty) or topic
 
     eff = "idle" if state == "start" else state
     msg = sanitize(data.get("message"))
@@ -92,7 +93,7 @@ def main():
         "topic": topic,
         "cwd": cwd,
         "pid": pid,
-        "tty": tty_of(pid),
+        "tty": tty,
         "ppid": os.getppid(),
         "updated_at": time.time(),
     }
@@ -114,6 +115,7 @@ def main():
 
 
 LABELS_PATH = os.path.join(BASE, "labels.json")
+TABNAMES_DIR = os.path.join(BASE, "tab-names")   # per-project tty→tab-name maps, published by the IntelliJ plugin
 DEFAULT_BRANCHES = {"main", "master", "develop", "trunk"}
 # Titles Claude sometimes generates that describe the *conversation* rather than the task —
 # treat these as low-value so we fall through to the latest real prompt.
@@ -140,6 +142,37 @@ def custom_label(sid):
         return None
 
 
+def is_default_tab(name):
+    """IntelliJ's stock terminal tab titles ("Local", "Local (2)", "Local(2)") carry no
+    meaning — don't use them as a session label."""
+    base = name.replace(" ", "")
+    return base == "Local" or (base.startswith("Local(") and base.endswith(")"))
+
+
+def tab_label(tty):
+    """The IntelliJ terminal tab name for this tty (e.g. "TT AGI-18033"), published by the
+    Claude Sessions plugin under TABNAMES_DIR. Returns it only when it's a real, non-default
+    tab title refreshed in the last 15s (so a closed project's stale entry is ignored)."""
+    if not tty:
+        return None
+    import glob
+    best = None
+    for f in glob.glob(os.path.join(TABNAMES_DIR, "*.json")):
+        try:
+            entry = json.load(open(f)).get(tty)
+        except Exception:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        name = (entry.get("name") or "").strip()
+        ts = entry.get("ts", 0)
+        if not name or is_default_tab(name) or (time.time() - ts) > 15:
+            continue
+        if best is None or ts > best[1]:
+            best = (name, ts)
+    return best[0] if best else None
+
+
 def is_substantial(txt):
     """A user prompt worth using as a label — not a command, caveat, or filler."""
     if not txt or txt[0] == "<" or txt.startswith("Caveat:"):
@@ -156,13 +189,16 @@ def short(txt, n=44):
     return (txt[:n].rsplit(" ", 1)[0] or txt[:n]) + "…"
 
 
-def derive_label(sid, reg, cwd, transcript_path):
+def derive_label(sid, reg, cwd, transcript_path, tty=""):
     """A human-meaningful session label, best-first:
-    custom rename → Claude /rename → meaningful git branch (AGI-XXXXX in worktrees) →
-    decent AI title → latest substantial prompt → folder name."""
+    custom rename → IntelliJ tab name (e.g. "TT AGI-18033") → Claude /rename → meaningful
+    git branch (AGI-XXXXX in worktrees) → decent AI title → latest substantial prompt → folder."""
     c = custom_label(sid)
     if c:
         return c
+    tab = tab_label(tty)
+    if tab:
+        return tab
     if reg and (reg.get("name") or "").strip():
         return reg["name"].strip()
     title, latest = transcript_titles(transcript_path)

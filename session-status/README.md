@@ -5,9 +5,17 @@ waiting on you — the data source behind the companion IntelliJ plugin in this 
 
 ## How it works
 
-Claude Code hooks invoke `bin/record.py` on session lifecycle events
+Claude Code hooks invoke `bin/record` on session lifecycle events
 (`start` / `working` / `needs` / `done` / `end`). It writes a tiny per-session
 state file to `~/.claude/session-status/state/<session_id>.json`.
+
+`bin/record` is a compiled Rust binary (source in `recorder/`) — a drop-in,
+behaviour-identical replacement for the original `bin/record.py` (kept as a reference).
+It starts ~4× faster than the Python version and, since the hook fires on **every**
+`PostToolUse`, reads the payload then forks so the hook returns to Claude in ~1 ms while
+the real work (label derivation, git/ps, the transcript-flush wait on `done`) finishes
+in a detached child — off the hook's critical path. Set `RECORD_SYNC=1` to run it
+synchronously. The terminal dashboard (`bin/dashboard`) is the Rust port of `dashboard.py`.
 
 Two surfaces read that state:
 
@@ -26,8 +34,15 @@ lives in `~/.claude/session-status/`, shared with the IntelliJ plugin.
 ## Build & run
 
 ```sh
+# Rust recorder + dashboard (compiled binaries land in bin/, like the Swift surfaces):
+cd recorder
+cargo build --release
+cp target/release/record target/release/dashboard ../bin/
+cd ..
+
 cd bin
 swiftc -O floatdash.swift -o floatdash
+swiftc -O activate-pid.swift -o activate-pid   # fast IDE-foregrounding helper for the plugin
 
 # menu-bar app must be a signed .app bundle for clickable notifications + a login item:
 APP=ClaudeSessions.app
@@ -54,8 +69,11 @@ Point Claude Code's hooks (in `~/.claude/settings.json`) at `bin/record.py`, e.g
 
 ```json
 { "type": "command",
-  "command": "/opt/homebrew/bin/python3 /ABSOLUTE/PATH/TO/session-status/bin/record.py working" }
+  "command": "/ABSOLUTE/PATH/TO/session-status/bin/record working" }
 ```
+
+(The original Python wiring — `/opt/homebrew/bin/python3 …/bin/record.py working` — still
+works; just point the hooks at the compiled `bin/record` to get the faster path.)
 
 Events: `SessionStart → start`, `UserPromptSubmit`/`PostToolUse → working`,
 `Notification → needs`, `Stop → done`, `SessionEnd → end`.

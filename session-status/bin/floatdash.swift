@@ -345,6 +345,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
     var table: NSTableView!
     var scroll: NSScrollView!
     var emptyLabel: NSTextField!
+    var laneLabel: NSTextField!
+    var laneIcon: NSImageView!
+    var laneStack: NSStackView!
     var sessions: [Sess] = []
     var timer: Timer?
 
@@ -386,6 +389,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         cs.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(cs)
         countStack = cs
+
+        // Claimed team-test browser lanes — a tinted SF Symbol + count, mirroring the state
+        // chips, pinned bottom-right on the count-strip baseline.
+        let laneIv = NSImageView()
+        let laneCfg = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        laneIv.image = NSImage(systemSymbolName: "globe", accessibilityDescription: "browser lanes")?
+            .withSymbolConfiguration(laneCfg)
+        laneIv.imageScaling = .scaleProportionallyDown
+        laneIcon = laneIv
+        let laneCount = NSTextField(labelWithString: "")
+        laneCount.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        laneLabel = laneCount
+        let laneBox = NSStackView(views: [laneIv, laneCount])
+        laneBox.orientation = .horizontal
+        laneBox.alignment = .centerY
+        laneBox.spacing = 4
+        laneBox.toolTip = "Team-test browser lanes currently claimed"
+        laneBox.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(laneBox)
+        laneStack = laneBox
 
         let sep = NSBox(); sep.boxType = .separator
         sep.translatesAutoresizingMaskIntoConstraints = false
@@ -440,6 +463,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         NSLayoutConstraint.activate([
             cs.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -9),
             cs.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            laneStack.centerYAnchor.constraint(equalTo: cs.centerYAnchor),
+            laneStack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
             sep.bottomAnchor.constraint(equalTo: cs.topAnchor, constant: -8),
             sep.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
             sep.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
@@ -508,6 +533,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         }
     }
 
+    /// Number of team-test browser lanes currently claimed — one lock dir per lane under
+    /// ~/.chrome-team-test/.locks/ (created by claim-lane.sh, removed by release-lane.sh).
+    private func claimedLanes() -> Int {
+        let locks = (NSHomeDirectory() as NSString).appendingPathComponent(".chrome-team-test/.locks")
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: locks) else { return 0 }
+        return entries.filter { $0.hasPrefix("lane-") }.count
+    }
+
     private func chip(_ stateKey: String, _ count: Int) -> NSView {
         let st = style(stateKey)
         let iv = NSImageView()
@@ -536,6 +569,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
             let counts = ["needs", "yourturn", "working", "done"].map { k in (k, sessions.filter { $0.state == k }.count) }
             cs.arrangedSubviews.forEach { $0.removeFromSuperview() }
             for (key, n) in counts { cs.addArrangedSubview(chip(key, n)) }
+        }
+        if let ll = laneLabel {
+            let n = claimedLanes()
+            ll.stringValue = "\(n)"
+            ll.textColor = n > 0 ? .labelColor : .tertiaryLabelColor
+            laneIcon?.contentTintColor = n > 0 ? .secondaryLabelColor : .tertiaryLabelColor
         }
         emptyLabel.isHidden = !sessions.isEmpty
 

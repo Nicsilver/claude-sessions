@@ -1,6 +1,11 @@
 # Compiled Swift surfaces (build from the .swift sources with swiftc)
 bin/floatdash
 bin/menubar
+bin/activate-pid
+# Compiled Rust surfaces (build from recorder/ with: cargo build --release)
+bin/record
+bin/dashboard
+recorder/target/
 # Menu-bar app bundle (generated from menubar.swift + menubar-Info.plist)
 bin/ClaudeSessions.app/
 # icon build intermediates (AppIcon.icns is committed; these are regenerated)

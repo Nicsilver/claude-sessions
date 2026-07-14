@@ -94,16 +94,33 @@ object TerminalJump {
         (w as? com.intellij.openapi.ui.ComponentContainer)?.preferredFocusableComponent ?: componentOf(w)
 
     /** Bring THIS IDE app to the front by its own pid (so we never raise the wrong
-     *  IntelliJ instance), letting its window become key for immediate typing. */
+     *  IntelliJ instance), letting its window become key for immediate typing.
+     *
+     *  Prefers the native `activate-pid` helper (NSRunningApplication.activate ~10ms,
+     *  consistent); falls back to osascript→System Events (~100ms, and spikes to 1–2s
+     *  when System Events is cold/busy) only if the helper isn't built. */
     private fun activateThisApp() {
         runCatching {
             val pid = ProcessHandle.current().pid()
-            ProcessBuilder(
-                "osascript", "-e",
-                "tell application \"System Events\" to set frontmost of (first process whose unix id is $pid) to true"
-            ).start()
+            val home = System.getProperty("user.home")
+            val helper = sequenceOf(
+                "$home/IdeaProjects/claude-sessions/session-status/bin/activate-pid",
+                "$home/.claude/session-status/bin/activate-pid",
+            ).map(::File).firstOrNull { it.canExecute() }
+            if (helper != null) {
+                ProcessBuilder(helper.path, "$pid").start()
+            } else {
+                ProcessBuilder(
+                    "osascript", "-e",
+                    "tell application \"System Events\" to set frontmost of (first process whose unix id is $pid) to true"
+                ).start()
+            }
         }
     }
+
+    /** Public accessor for the controlling tty of a terminal widget (e.g. "ttys004"),
+     *  "" if none — used by [TabNamePublisher] to join tabs to recorder sessions. */
+    fun ttyOf(widget: Any): String = widgetTty(widget)
 
     private fun widgetTty(w: Any): String {
         val tc = runCatching { w.javaClass.getMethod("getTtyConnector").invoke(w) }.getOrNull() ?: return ""

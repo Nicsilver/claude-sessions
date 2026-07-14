@@ -18,7 +18,8 @@ AGENT="$HOME/Library/LaunchAgents/com.nije.claude-sessions.menubar.plist"
 
 case "$1" in
   dash|dashboard)
-    exec "$PY" "$BIN/dashboard.py" ;;
+    # prefer the compiled Rust dashboard; fall back to the Python original if not built
+    if [ -x "$BIN/dashboard" ]; then exec "$BIN/dashboard"; else exec "$PY" "$BIN/dashboard.py"; fi ;;
   float|panel)
     if pgrep -f "$BIN/floatdash" >/dev/null; then echo "floating panel already running"; exit 0; fi
     "$BIN/floatdash" >/dev/null 2>&1 &
