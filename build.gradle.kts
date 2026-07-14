@@ -29,7 +29,7 @@ dependencies {
             // useInstaller = false fetches the ideaIC artifact from the intellij-repository Maven
             // repo instead of the data.services installer feed — the feed lags and doesn't list
             // 2026.1.4 yet, but the Maven repo has it. 2026.1.4 is build 261.x (matches sinceBuild).
-            intellijIdeaCommunity("2026.1.4", useInstaller = false)
+            intellijIdeaCommunity("2026.1.4") { useInstaller = false }
             // The multi-OS archive (useInstaller=false) doesn't bundle the JetBrains Runtime, so
             // add it explicitly — otherwise runtimeDirectory resolution fails.
             jetbrainsRuntime()
