@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <title>Claude sessions</title>
 <style>
-  /* Ported from floatdash.swift / MainWindow.cs — same colours, sizes and effects. */
+  /* Layout ported from floatdash.swift / MainWindow.cs; 2026-07 restyle: OLED-ink surface,
+     weight-600 names, brighter meta column (picked from side-by-side theme rounds). */
   * { margin:0; padding:0; box-sizing:border-box; user-select:none; -webkit-user-select:none; cursor:default; }
   html, body { background:transparent; overflow:hidden; }
   body {
@@ -13,22 +14,22 @@
   }
   #panel {
     margin:14px;                              /* gutter the drop shadow falls into */
-    background:#1a1a1a;
+    background:#101012;
     border-radius:10px;
-    border:1px solid rgba(255,255,255,.165);
+    border:1px solid rgba(255,255,255,.11);
     /* Must fully fade inside the 14px gutter or it clips with a hard edge. */
-    box-shadow:0 4px 9px rgba(0,0,0,.45), 0 1px 4px rgba(0,0,0,.4);
+    box-shadow:0 6px 14px rgba(0,0,0,.55), 0 1px 3px rgba(0,0,0,.5);
     overflow:hidden;
   }
 
   header { height:28px; display:flex; align-items:center; padding:0 8px; }
-  header .title { flex:1; text-align:center; font-size:11.5px; color:#98989E; pointer-events:none; }
+  header .title { flex:1; text-align:center; font-size:11.5px; font-weight:600; letter-spacing:.3px; color:#C9C9CE; pointer-events:none; }
   .disc {
     width:18px; height:18px; border-radius:9px; flex:none;
     display:flex; align-items:center; justify-content:center;
-    color:#98989E; font-size:14px; line-height:1; cursor:pointer;
+    color:#A8A8AF; font-size:14px; line-height:1; cursor:pointer;
   }
-  .disc:hover { color:#ECECEC; background:rgba(255,255,255,.13); }
+  .disc:hover { color:#F5F5F7; background:rgba(255,255,255,.13); }
   #plus { font-size:15px; }
 
   #list { padding:4px 6px; overflow-y:auto; overflow-x:hidden; }
@@ -56,17 +57,18 @@
   }
   .name {
     flex:1; min-width:0; position:relative;
-    margin-left:4px; font-size:11.5px; color:#ECECEC;
+    margin-left:4px; font-size:11px; font-weight:600; letter-spacing:-.05px; color:#F5F5F7;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   }
   .name input {
-    width:100%; font:inherit; color:#ECECEC; background:rgba(255,255,255,.08);
+    width:100%; font:inherit; color:#F5F5F7; background:rgba(255,255,255,.08);
     border:1px solid rgba(255,255,255,.2); border-radius:4px; padding:1px 4px; outline:none;
     user-select:text; -webkit-user-select:text; cursor:text;
   }
   .meta {
     flex:none; position:relative;
-    margin:0 11px 0 8px; font-size:10px; color:#98989E;
+    margin:0 11px 0 8px; font-size:10.5px; font-weight:500; letter-spacing:.15px;
+    color:#B9B9C0; font-variant-numeric:tabular-nums;
   }
   .row.muted .name, .row.muted .meta { color:#6A6A6E; }
   .row.muted .bar { background:#6A6A6E; }
@@ -83,14 +85,14 @@
   #settings .sec:first-child { padding-top:4px; border-top:none; }
   #settings .field { margin-bottom:9px; }
   #settings .field:last-child { margin-bottom:0; }
-  #settings label { display:block; font-size:11px; color:#98989E; margin-bottom:4px; }
+  #settings label { display:block; font-size:11px; color:#A8A8AF; margin-bottom:4px; }
   #settings select, #settings textarea {
-    width:100%; outline:none; color:#ECECEC;
+    width:100%; outline:none; color:#F5F5F7;
     background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.15);
     border-radius:7px; padding:6px 8px; font-size:11.5px;
   }
   #settings select { padding:5px 8px; }
-  #settings select option { background:#2b2b2b; color:#ECECEC; }
+  #settings select option { background:#232326; color:#F5F5F7; }
   #settings textarea {
     resize:none; line-height:1.5; font-family:Consolas, monospace;
     user-select:text; -webkit-user-select:text; cursor:text;
@@ -98,16 +100,16 @@
   #settings select:focus, #settings textarea:focus, #settings .shortcut:focus {
     border-color:rgba(255,255,255,.32);
   }
-  #settings .hint { font-size:10px; color:#8A8A8E; margin-top:6px; line-height:1.55; }
-  #settings .hint code { color:#ECECEC; font-family:Consolas, monospace; }
+  #settings .hint { font-size:10px; color:#96969D; margin-top:6px; line-height:1.55; }
+  #settings .hint code { color:#F5F5F7; font-family:Consolas, monospace; }
   /* label-left / control-right row (shortcuts + toggles) */
   #settings .row2 {
     display:flex; align-items:center; justify-content:space-between;
-    gap:10px; min-height:28px; font-size:11.5px; color:#ECECEC;
+    gap:10px; min-height:28px; font-size:11.5px; color:#F5F5F7;
   }
   #settings .shortcut {
     min-width:106px; text-align:center; padding:4px 10px; cursor:pointer;
-    font:11px Consolas, monospace; color:#ECECEC; letter-spacing:.3px;
+    font:11px Consolas, monospace; color:#F5F5F7; letter-spacing:.3px;
     background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.15);
     border-radius:6px; outline:none;
   }
@@ -129,7 +131,7 @@
   #settings .switch input:checked + .track::before { transform:translateX(14px); }
   #settings .btnrow { display:flex; gap:8px; margin-top:14px; }
   #settings button {
-    flex:1; padding:6px 0; font-size:11.5px; font-family:inherit; color:#ECECEC; cursor:pointer;
+    flex:1; padding:6px 0; font-size:11.5px; font-family:inherit; color:#F5F5F7; cursor:pointer;
     background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.16); border-radius:7px;
     transition:background .12s ease;
   }
@@ -137,22 +139,18 @@
   #settings #save { color:#fff; background:rgba(52,199,89,.22); border-color:rgba(52,199,89,.45); }
   #settings #save:hover { background:rgba(52,199,89,.34); }
 
-  #sep { height:1px; background:#333; margin:0 14px; }
+  #sep { height:1px; background:#232326; margin:0 14px; }
 
   footer { position:relative; padding:7px 0 9px; }
   footer #gear {
     position:absolute; right:7px; top:50%; transform:translateY(-55%);
     font-size:12px; color:#6A6A6E;
   }
-  footer #gear:hover { color:#ECECEC; }
+  footer #gear:hover { color:#F5F5F7; }
   #chips { display:flex; justify-content:center; gap:14px; }
   .chip { display:flex; align-items:center; gap:4px; pointer-events:none; }
-  .chip .dot {
-    width:11px; height:11px; border-radius:50%;
-    display:flex; align-items:center; justify-content:center;
-    font-size:8px; font-weight:700; color:#1a1a1a; line-height:1;
-  }
-  .chip .n { font-size:11.5px; font-weight:600; color:#ECECEC; }
+  .chip .dot { width:11px; height:11px; border-radius:50%; }
+  .chip .n { font-size:11.5px; font-weight:600; color:#F5F5F7; }
   .chip.zero .n { color:#6A6A6E; }
 </style>
 </head>
@@ -333,17 +331,16 @@ function render() {
 }
 
 function renderChips() {
-  const keys = [["needs", "!"], ["yourturn", ""], ["working", ""], ["done", "✓"]];
+  const keys = ["needs", "yourturn", "working", "done"];
   const el = document.getElementById("chips");
   el.innerHTML = "";
-  for (const [key, glyph] of keys) {
+  for (const key of keys) {
     const n = sessions.filter(s => s.state === key).length;
     const chip = document.createElement("div");
     chip.className = "chip" + (n ? "" : " zero");
     const dot = document.createElement("div");
     dot.className = "dot";
     dot.style.background = n ? `rgb(${rgb(key)})` : "#6A6A6E";
-    dot.textContent = glyph;
     const count = document.createElement("div");
     count.className = "n";
     count.textContent = n;
