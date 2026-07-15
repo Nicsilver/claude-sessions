@@ -47,17 +47,28 @@ pub fn run() -> tauri::Result<()> {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             setup_tray(app.handle())?;
             register_hotkeys(app.handle());
+            // Auto-hide is a level check exactly once, at startup: launching at login with
+            // nothing running should go straight to the tray rather than flash the panel.
+            let startup = Pulse::of(&model::load());
             if let Some(win) = app.get_webview_window("main") {
                 position_top_right(&win);
-                let _ = win.show();
+                if !(auto_hide() && startup.live == 0) {
+                    let _ = win.show();
+                }
             }
             // Heartbeat: reload sessions, refresh the tray badge, push to the frontend.
             let handle = app.handle().clone();
-            std::thread::spawn(move || loop {
-                let sessions = model::load();
-                update_tray(&handle, &sessions);
-                let _ = handle.emit("sessions", to_json(&sessions));
-                std::thread::sleep(Duration::from_millis(1500));
+            std::thread::spawn(move || {
+                let mut prev = startup;
+                loop {
+                    let sessions = model::load();
+                    update_tray(&handle, &sessions);
+                    let _ = handle.emit("sessions", to_json(&sessions));
+                    let pulse = Pulse::of(&sessions);
+                    apply_auto_visibility(&handle, &prev, &pulse);
+                    prev = pulse;
+                    std::thread::sleep(Duration::from_millis(1500));
+                }
             });
             Ok(())
         })
@@ -83,6 +94,82 @@ fn position_top_right(win: &tauri::WebviewWindow) {
         - (6.0 * mon.scale_factor()) as i32;
     let y = mon.position().y + (26.0 * mon.scale_factor()) as i32;
     let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+// ---- auto-hide / auto-show ----
+
+/// What counts as a "live" session for the tray badge and the auto-hide/auto-show toggles: a
+/// session still in play. A finished one (idle/done) shouldn't hold the dashboard open or pop
+/// it back up.
+const LIVE_STATES: [&str; 3] = ["needs", "yourturn", "working"];
+
+/// The slice of a heartbeat that auto-hide/auto-show react to.
+struct Pulse {
+    live: usize,
+    /// Ids of the sessions currently asking for you, so a *new* one can be told from a standing one.
+    needs: std::collections::HashSet<String>,
+}
+
+impl Pulse {
+    fn of(sessions: &[model::Sess]) -> Self {
+        let now = model::now();
+        let live: Vec<&model::Sess> = sessions
+            .iter()
+            .filter(|s| !s.muted(now) && LIVE_STATES.contains(&s.state.as_str()))
+            .collect();
+        Self {
+            live: live.len(),
+            needs: live
+                .iter()
+                .filter(|s| s.state == "needs")
+                .map(|s| s.id.clone())
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum Auto {
+    Show,
+    Hide,
+    Nothing,
+}
+
+/// Both toggles are edge-triggered — they act on the heartbeat where something *changed*, never
+/// on the standing level. That's what keeps them from fighting the user: hide the panel by hand
+/// with sessions running and it stays hidden, because no transition has happened yet.
+fn auto_action(prev: &Pulse, now: &Pulse, hide: bool, show: bool) -> Auto {
+    // Show wins over hide: on a heartbeat where the last session goes quiet as another one
+    // starts asking for you, surfacing it is the useful answer.
+    if show {
+        let appeared = prev.live == 0 && now.live > 0;
+        let newly_needs = now.needs.difference(&prev.needs).next().is_some();
+        if appeared || newly_needs {
+            return Auto::Show;
+        }
+    }
+    if hide && prev.live > 0 && now.live == 0 {
+        return Auto::Hide;
+    }
+    Auto::Nothing
+}
+
+fn apply_auto_visibility(app: &tauri::AppHandle, prev: &Pulse, now: &Pulse) {
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    match auto_action(prev, now, auto_hide(), auto_show()) {
+        Auto::Show => {
+            position_top_right(&win);
+            // show() without set_focus: this is a passive panel reacting to a background event,
+            // and stealing focus mid-keystroke would be worse than not showing at all.
+            let _ = win.show();
+        }
+        Auto::Hide => {
+            let _ = win.hide();
+        }
+        Auto::Nothing => {}
+    }
 }
 
 fn toggle_window(app: &tauri::AppHandle) {
@@ -338,6 +425,24 @@ fn config_str(key: &str, default: &str) -> String {
         .to_string()
 }
 
+fn config_bool(key: &str, default: bool) -> bool {
+    crate::paths::load_json(&crate::paths::config_path())
+        .get(key)
+        .and_then(Value::as_bool)
+        .unwrap_or(default)
+}
+
+// Independent by design (either, both or neither). Auto-hide defaults off — a dashboard that
+// disappears on its own is a surprise you have to learn. Auto-show defaults on — surfacing a
+// session that wants you is the widget's whole job.
+fn auto_hide() -> bool {
+    config_bool("auto_hide", false)
+}
+
+fn auto_show() -> bool {
+    config_bool("auto_show", true)
+}
+
 fn new_session_cmd_raw() -> String {
     config_str("new_session_cmd", "claude")
 }
@@ -383,21 +488,30 @@ fn get_config(app: tauri::AppHandle) -> Value {
         "new_session_terminal": new_session_terminal(),
         "hotkey_jump": hotkey_jump(),
         "hotkey_new": hotkey_new(),
+        "auto_hide": auto_hide(),
+        "auto_show": auto_show(),
         // OS state (HKCU Run / login item), not stored in config.json.
         "autostart": app.autolaunch().is_enabled().unwrap_or(false),
         "terminals": targets,
     })
 }
 
-#[tauri::command]
-fn set_config(
-    app: tauri::AppHandle,
+/// What the options pane saves. One struct rather than a parameter per field, so adding an
+/// option stays a one-line change here and in the pane.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Settings {
     new_session_cmd: String,
     new_session_terminal: String,
     hotkey_jump: String,
     hotkey_new: String,
+    auto_hide: bool,
+    auto_show: bool,
     autostart: bool,
-) {
+}
+
+#[tauri::command]
+fn set_config(app: tauri::AppHandle, settings: Settings) {
     use tauri_plugin_autostart::ManagerExt;
     let path = crate::paths::config_path();
     if let Some(dir) = path.parent() {
@@ -407,10 +521,12 @@ fn set_config(
     if !root.is_object() {
         root = json!({});
     }
-    root["new_session_cmd"] = json!(new_session_cmd.trim());
-    root["new_session_terminal"] = json!(new_session_terminal.trim());
-    root["hotkey_jump"] = json!(hotkey_jump.trim());
-    root["hotkey_new"] = json!(hotkey_new.trim());
+    root["new_session_cmd"] = json!(settings.new_session_cmd.trim());
+    root["new_session_terminal"] = json!(settings.new_session_terminal.trim());
+    root["hotkey_jump"] = json!(settings.hotkey_jump.trim());
+    root["hotkey_new"] = json!(settings.hotkey_new.trim());
+    root["auto_hide"] = json!(settings.auto_hide);
+    root["auto_show"] = json!(settings.auto_show);
     let _ = std::fs::write(
         &path,
         serde_json::to_string_pretty(&root).unwrap_or_default(),
@@ -419,8 +535,8 @@ fn set_config(
     register_hotkeys(&app);
     // Launch-at-login is OS state — only touch it when the toggle actually changed.
     let mgr = app.autolaunch();
-    if autostart != mgr.is_enabled().unwrap_or(false) {
-        let _ = if autostart {
+    if settings.autostart != mgr.is_enabled().unwrap_or(false) {
+        let _ = if settings.autostart {
             mgr.enable()
         } else {
             mgr.disable()
@@ -436,4 +552,139 @@ fn toggle_mute(id: String) {
 #[tauri::command]
 fn rename(id: String, name: String) {
     model::set_label(&id, &name);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pulse with `live` sessions, of which `needs` are asking for you.
+    fn pulse(live: usize, needs: &[&str]) -> Pulse {
+        Pulse {
+            live,
+            needs: needs.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    const BOTH: (bool, bool) = (true, true);
+
+    #[test]
+    fn shows_when_the_first_session_appears() {
+        let a = auto_action(&pulse(0, &[]), &pulse(1, &[]), BOTH.0, BOTH.1);
+        assert_eq!(a, Auto::Show);
+    }
+
+    #[test]
+    fn shows_when_a_session_newly_needs_you() {
+        let a = auto_action(&pulse(2, &[]), &pulse(2, &["s1"]), BOTH.0, BOTH.1);
+        assert_eq!(a, Auto::Show);
+    }
+
+    /// The edge-trigger contract: a session that was already asking for you last tick must not
+    /// re-show the panel every 1.5s after you hide it by hand.
+    #[test]
+    fn standing_needs_does_not_re_show() {
+        let a = auto_action(&pulse(2, &["s1"]), &pulse(2, &["s1"]), BOTH.0, BOTH.1);
+        assert_eq!(a, Auto::Nothing);
+    }
+
+    /// Same contract for a steady stream of live sessions: no transition, no interference.
+    #[test]
+    fn steady_live_sessions_do_not_re_show() {
+        let a = auto_action(&pulse(3, &[]), &pulse(2, &[]), BOTH.0, BOTH.1);
+        assert_eq!(a, Auto::Nothing);
+    }
+
+    #[test]
+    fn hides_when_the_last_session_goes_quiet() {
+        let a = auto_action(&pulse(1, &[]), &pulse(0, &[]), BOTH.0, BOTH.1);
+        assert_eq!(a, Auto::Hide);
+    }
+
+    #[test]
+    fn stays_hidden_while_nothing_is_live() {
+        let a = auto_action(&pulse(0, &[]), &pulse(0, &[]), BOTH.0, BOTH.1);
+        assert_eq!(a, Auto::Nothing);
+    }
+
+    /// A different session asking for you is a new edge even though the count is unchanged.
+    #[test]
+    fn a_different_session_needing_you_is_a_new_edge() {
+        let a = auto_action(&pulse(2, &["s1"]), &pulse(2, &["s2"]), BOTH.0, BOTH.1);
+        assert_eq!(a, Auto::Show);
+    }
+
+    #[test]
+    fn show_wins_when_one_session_ends_as_another_asks() {
+        let a = auto_action(&pulse(1, &[]), &pulse(1, &["s2"]), BOTH.0, BOTH.1);
+        assert_eq!(a, Auto::Show);
+    }
+
+    // The two toggles are independent: each must be inert when off and still fire when it's the
+    // only one on.
+
+    #[test]
+    fn hide_off_leaves_the_panel_up() {
+        let a = auto_action(&pulse(1, &[]), &pulse(0, &[]), false, true);
+        assert_eq!(a, Auto::Nothing);
+    }
+
+    #[test]
+    fn show_off_leaves_the_panel_hidden() {
+        let a = auto_action(&pulse(0, &[]), &pulse(1, &["s1"]), true, false);
+        assert_eq!(a, Auto::Nothing);
+    }
+
+    #[test]
+    fn hide_alone_still_hides() {
+        let a = auto_action(&pulse(1, &[]), &pulse(0, &[]), true, false);
+        assert_eq!(a, Auto::Hide);
+    }
+
+    #[test]
+    fn show_alone_still_shows() {
+        let a = auto_action(&pulse(0, &[]), &pulse(1, &[]), false, true);
+        assert_eq!(a, Auto::Show);
+    }
+
+    #[test]
+    fn both_off_never_acts() {
+        assert_eq!(
+            auto_action(&pulse(1, &[]), &pulse(0, &[]), false, false),
+            Auto::Nothing
+        );
+        assert_eq!(
+            auto_action(&pulse(0, &[]), &pulse(1, &["s1"]), false, false),
+            Auto::Nothing
+        );
+    }
+
+    /// Muted and finished sessions must not count as live, or a muted session would pop the
+    /// panel up — the opposite of what muting it meant.
+    #[test]
+    fn pulse_counts_only_unmuted_live_sessions() {
+        let now = model::now();
+        let sess = |id: &str, state: &str, mute_until: f64| model::Sess {
+            id: id.into(),
+            topic: id.into(),
+            state: state.into(),
+            updated: now,
+            message: String::new(),
+            terminal: "wt".into(),
+            term_pid: 1,
+            pid: 1,
+            tab_title: String::new(),
+            tty: String::new(),
+            mute_until,
+        };
+        let p = Pulse::of(&[
+            sess("a", "needs", 0.0),
+            sess("b", "working", 0.0),
+            sess("c", "needs", now + 3600.0), // muted
+            sess("d", "idle", 0.0),           // finished
+            sess("e", "done", 0.0),           // finished
+        ]);
+        assert_eq!(p.live, 2);
+        assert_eq!(p.needs, ["a".to_string()].into_iter().collect());
+    }
 }

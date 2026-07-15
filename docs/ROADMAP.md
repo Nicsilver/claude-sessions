@@ -31,14 +31,18 @@ Unit tests cover the invariant-critical logic:
   (token overlap, exact-title win, single generic "Claude Code" fallback, don't-guess-on-a-tie).
 - the ⏳/✅ turn-marker parsing (`classify_turn_text` in `recorder.rs`).
 
-## 4. Auto-hide / auto-show (two independent options)
+## 4. Auto-hide / auto-show (two independent options)  ✅ done
 
-Two **separate** toggles in the options pane:
-- **Auto-hide** — hide the dashboard to the tray when there are no live sessions.
-- **Auto-show** — pop the dashboard back up when a session appears (or flips to needs-you).
+Two independent toggles in the options pane, stored as `auto_hide` (default off) / `auto_show`
+(default on) in `config.json` and driven off the 1.5 s heartbeat:
+- **Hide when nothing is live** — drops to the tray when the last live session finishes.
+- **Show on new or needs-you** — pops the panel back when a session appears or flips to needs-you.
 
-They must be independent (either on its own, both, or neither). Driven off the 1.5 s heartbeat's
-session count. Store as `auto_hide` / `auto_show` in `config.json`.
+Both are **edge-triggered** (`auto_action` in `gui.rs`): they act only on the heartbeat where the
+count crosses zero or a session *newly* asks for you, never on the standing level — otherwise a
+hand-hidden panel would be dragged back up every 1.5 s. Auto-hide is also applied once as a level
+check at startup, so launching at login with nothing running goes straight to the tray. "Live"
+means unmuted and in one of `needs`/`yourturn`/`working`, matching the tray badge.
 
 ## 5. Light theme
 

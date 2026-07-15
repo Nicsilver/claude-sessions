@@ -61,6 +61,15 @@ Two **global hotkeys** — they work from anywhere, even with the dashboard hidd
 
 Click the **⚙ gear** for options: which terminal new sessions open in and the command to launch them, rebind the two hotkeys, and toggle **Start at login**.
 
+The dashboard can also get out of your way on its own — two independent toggles:
+
+| Option | Default | What it does |
+|---|---|---|
+| **Hide when nothing is live** | off | Drops to the tray when the last session finishes |
+| **Show on new or needs-you** | on | Pops the panel back when a session starts, or when one asks for you |
+
+Both only act the moment something changes, so hiding the panel by hand keeps it hidden until the next session appears or needs you.
+
 <p align="center">
   <img src="docs/img/settings.png" width="326" alt="The options pane">
 </p>

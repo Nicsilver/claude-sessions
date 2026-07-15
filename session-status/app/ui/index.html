@@ -186,6 +186,17 @@
       <div class="shortcut" id="hk-new" tabindex="0" title="Click, then press a shortcut"></div>
     </div>
 
+    <div class="sec">Dashboard</div>
+    <div class="row2">
+      <span>Hide when nothing is live</span>
+      <label class="switch"><input type="checkbox" id="auto-hide"><span class="track"></span></label>
+    </div>
+    <div class="row2">
+      <span>Show on new or needs-you</span>
+      <label class="switch"><input type="checkbox" id="auto-show"><span class="track"></span></label>
+    </div>
+    <div class="hint">Hiding goes to the tray when the last session finishes; showing pops the panel back when a session starts or asks for you.</div>
+
     <div class="sec">Startup</div>
     <div class="row2">
       <span>Start at login</span>
@@ -383,17 +394,23 @@ document.getElementById("gear").addEventListener("click", () => {
     hkNew = c.hotkey_new || "";
     document.getElementById("hk-jump").textContent = fmtAccel(hkJump);
     document.getElementById("hk-new").textContent = fmtAccel(hkNew);
+    document.getElementById("auto-hide").checked = !!c.auto_hide;
+    document.getElementById("auto-show").checked = !!c.auto_show;
     document.getElementById("autostart").checked = !!c.autostart;
     setSettingsOpen(true);
   });
 });
 document.getElementById("save").addEventListener("click", () => {
   invoke("set_config", {
-    newSessionCmd: document.getElementById("cmd").value,
-    newSessionTerminal: document.getElementById("term").value,
-    hotkeyJump: hkJump,
-    hotkeyNew: hkNew,
-    autostart: document.getElementById("autostart").checked,
+    settings: {
+      newSessionCmd: document.getElementById("cmd").value,
+      newSessionTerminal: document.getElementById("term").value,
+      hotkeyJump: hkJump,
+      hotkeyNew: hkNew,
+      autoHide: document.getElementById("auto-hide").checked,
+      autoShow: document.getElementById("auto-show").checked,
+      autostart: document.getElementById("autostart").checked,
+    },
   }).then(() => setSettingsOpen(false));
 });
 document.getElementById("cancel").addEventListener("click", () => setSettingsOpen(false));
