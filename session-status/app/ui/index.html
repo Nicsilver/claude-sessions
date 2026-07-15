@@ -230,6 +230,7 @@ const ACTIVE = new Set(["needs", "yourturn", "working"]);
 const rgb = s => COLORS[s] || COLORS.idle;
 
 let sessions = [];
+let mouseX = -1;       // last cursor X — re-applied after re-renders so the hover bloom doesn't recenter
 let renaming = null;   // session id currently being renamed inline
 let settingsOpen = false;
 let lastH = 0;
@@ -309,6 +310,7 @@ function render() {
     }
 
     row.addEventListener("mousemove", e => {
+      mouseX = e.clientX;
       row.style.setProperty("--mx", (e.clientX - row.getBoundingClientRect().left) + "px");
     });
     row.addEventListener("click", e => {
@@ -325,6 +327,13 @@ function render() {
       setTimeout(refresh, 600);
     });
     list.appendChild(row);
+  }
+  if (mouseX >= 0) {
+    // The 1.5s session push rebuilds every row; without this the bloom under a
+    // stationary cursor snaps back to the 50% fallback until the mouse moves.
+    for (const r of list.querySelectorAll(".row")) {
+      r.style.setProperty("--mx", (mouseX - r.getBoundingClientRect().left) + "px");
+    }
   }
   renderChips();
   fitHeight();
