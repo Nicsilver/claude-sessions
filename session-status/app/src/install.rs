@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn leaves_unrelated_hooks_alone() {
         // The whole point of matching the executable, not the string: never clobber a user's own
-        // hooks — this is the "awake" hook Nic actually has.
+        // hooks, e.g. a keep-awake hook that also runs on every turn.
         assert!(!is_recorder_cmd("caffeinate -di"));
         assert!(!is_recorder_cmd("/usr/bin/keep-awake --loop"));
         assert!(!is_recorder_cmd("node /home/me/notify.js"));
