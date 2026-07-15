@@ -1,6 +1,6 @@
 [package]
 name = "claude-sessions"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "Claude Code session-status widget + hook recorder — one cross-platform binary (GUI, recorder, installer)"
 license = "AGPL-3.0"
