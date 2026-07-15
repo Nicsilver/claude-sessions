@@ -278,6 +278,7 @@ fn open_tray_menu(app: &tauri::AppHandle, x: f64, y: f64) {
             "monitor": monitor,
             "sessions": to_json(&model::load()),
             "markers_missing": !install::claude_md_has_markers(),
+            "theme": theme(),
         }),
     );
 }
@@ -447,6 +448,11 @@ fn new_session_cmd_raw() -> String {
     config_str("new_session_cmd", "claude")
 }
 
+/// Dashboard + tray-menu theme: "system" (follow the OS), "dark" or "light".
+fn theme() -> String {
+    config_str("theme", "system")
+}
+
 // Global-hotkey defaults mirror menubar.swift's ⌃⌥⌘J / ⌃⌥⌘N — CmdOrCtrl maps to ⌘ on mac and
 // Ctrl on Windows/Linux. Accelerator strings are what tauri-plugin-global-shortcut parses.
 const DEFAULT_HOTKEY_JUMP: &str = "CmdOrCtrl+Alt+J";
@@ -486,6 +492,7 @@ fn get_config(app: tauri::AppHandle) -> Value {
     json!({
         "new_session_cmd": new_session_cmd_raw(),
         "new_session_terminal": new_session_terminal(),
+        "theme": theme(),
         "hotkey_jump": hotkey_jump(),
         "hotkey_new": hotkey_new(),
         "auto_hide": auto_hide(),
@@ -503,6 +510,7 @@ fn get_config(app: tauri::AppHandle) -> Value {
 struct Settings {
     new_session_cmd: String,
     new_session_terminal: String,
+    theme: String,
     hotkey_jump: String,
     hotkey_new: String,
     auto_hide: bool,
@@ -523,6 +531,7 @@ fn set_config(app: tauri::AppHandle, settings: Settings) {
     }
     root["new_session_cmd"] = json!(settings.new_session_cmd.trim());
     root["new_session_terminal"] = json!(settings.new_session_terminal.trim());
+    root["theme"] = json!(settings.theme.trim());
     root["hotkey_jump"] = json!(settings.hotkey_jump.trim());
     root["hotkey_new"] = json!(settings.hotkey_new.trim());
     root["auto_hide"] = json!(settings.auto_hide);
