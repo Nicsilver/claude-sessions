@@ -8,3 +8,6 @@ build/
 .DS_Store
 out/
 local.properties
+
+# Local AI working notes — never commit
+CLAUDE.md
