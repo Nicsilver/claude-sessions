@@ -318,8 +318,9 @@ fn classify_turn(transcript: &str) -> (String, String) {
 }
 
 /// Decide Done vs Your-turn from the assistant's final message text, plus a short snippet to
-/// show for your-turn. Looks at the last non-empty line: `⏳` → your turn (snippet = the line
-/// above it), `✅` → done, otherwise a trailing `?` is a weak your-turn fallback, else done.
+/// show for your-turn. Looks at the last non-empty line: `○` (hollow) → your turn (snippet = the
+/// line above it), `●` (filled) → done, otherwise a trailing `?` is a weak your-turn fallback,
+/// else done.
 fn classify_turn_text(text: &str) -> (String, String) {
     let lines: Vec<&str> = text
         .lines()
@@ -330,7 +331,7 @@ fn classify_turn_text(text: &str) -> (String, String) {
         return ("done".into(), String::new());
     };
     let last = last.trim();
-    if last.contains('⏳') {
+    if last.contains('○') {
         let snippet = if lines.len() >= 2 {
             lines[lines.len() - 2].trim().to_string()
         } else {
@@ -338,7 +339,7 @@ fn classify_turn_text(text: &str) -> (String, String) {
         };
         return ("yourturn".into(), snippet);
     }
-    if last.contains('✅') {
+    if last.contains('●') {
         return ("done".into(), String::new());
     }
     if last.trim_end().ends_with('?') {
@@ -495,23 +496,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn marker_done_when_last_line_has_check() {
+    fn marker_done_when_last_line_has_filled_circle() {
         assert_eq!(
-            classify_turn_text("did the thing\n\n✅"),
+            classify_turn_text("did the thing\n\n●"),
             ("done".into(), String::new())
         );
     }
 
     #[test]
-    fn marker_yourturn_when_last_line_has_hourglass() {
-        let (verdict, snippet) = classify_turn_text("Which database should I use?\n⏳");
+    fn marker_yourturn_when_last_line_has_hollow_circle() {
+        let (verdict, snippet) = classify_turn_text("Which database should I use?\n○");
         assert_eq!(verdict, "yourturn");
-        assert_eq!(snippet, "Which database should I use?"); // snippet is the line above ⏳
+        assert_eq!(snippet, "Which database should I use?"); // snippet is the line above ○
     }
 
     #[test]
-    fn hourglass_alone_gives_empty_snippet() {
-        assert_eq!(classify_turn_text("⏳"), ("yourturn".into(), String::new()));
+    fn hollow_circle_alone_gives_empty_snippet() {
+        assert_eq!(classify_turn_text("○"), ("yourturn".into(), String::new()));
     }
 
     #[test]
@@ -529,10 +530,10 @@ mod tests {
     }
 
     #[test]
-    fn check_beats_a_dangling_earlier_question() {
-        // A `?` earlier in the turn must not override a final ✅ line.
+    fn filled_circle_beats_a_dangling_earlier_question() {
+        // A `?` earlier in the turn must not override a final ● line.
         assert_eq!(
-            classify_turn_text("Do you want X?\nOkay, done.\n✅").0,
+            classify_turn_text("Do you want X?\nOkay, done.\n●").0,
             "done"
         );
     }

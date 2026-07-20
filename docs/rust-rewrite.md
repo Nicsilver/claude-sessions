@@ -31,7 +31,7 @@ On first GUI launch it auto-runs `install` (backs up settings.json first, non-de
 - 1.5s refresh; heartbeat thread keeps the badge live while hidden; `windows_subsystem=windows` so
   hooks never flash a console.
 - **CLAUDE.md turn-marker offer** — a one-time dismissible banner ("Add turn markers to CLAUDE.md?")
-  that appends the ⏳/✅ instruction to `~/.claude/CLAUDE.md` (idempotent, backs up first). Also a
+  that appends the ●/○ instruction to `~/.claude/CLAUDE.md` (idempotent, backs up first). Also a
   `claude-sessions markers` subcommand. See the README "Turn markers" section for why. Verified.
 
 **Not yet ported (parity gaps — tracked for later phases):**

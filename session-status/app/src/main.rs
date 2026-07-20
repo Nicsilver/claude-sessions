@@ -58,7 +58,7 @@ fn main() {
                 }
             }
         }
-        // Append the optional ⏳/✅ turn-marker instruction to the global CLAUDE.md.
+        // Append the optional ●/○ turn-marker instruction to the global CLAUDE.md.
         Some("markers") => {
             platform::attach_parent_console();
             std::process::exit(if install::append_claude_md_markers() {

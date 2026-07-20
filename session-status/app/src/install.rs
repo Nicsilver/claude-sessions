@@ -135,7 +135,7 @@ pub fn run(install: bool) -> i32 {
         println!("Start a NEW Claude session (or send a prompt) to populate the widget.");
         if !claude_md_has_markers() {
             println!();
-            println!("Optional: `claude-sessions markers` adds a turn-marker instruction (⏳/✅)");
+            println!("Optional: `claude-sessions markers` adds a turn-marker instruction (●/○)");
             println!("to ~/.claude/CLAUDE.md so done/your-turn states are accurate.");
             println!("Also available from the tray icon's right-click menu.");
         }
@@ -158,13 +158,13 @@ fn backup(path: &Path) {
     }
 }
 
-// ---- optional: the ⏳/✅ turn-marker instruction in the global CLAUDE.md ----
+// ---- optional: the ●/○ turn-marker instruction in the global CLAUDE.md ----
 
 const MARKER_SENTINEL: &str = "claude-sessions: turn markers";
 const MARKER_SNIPPET: &str = "\n\n<!-- claude-sessions: turn markers -->\n\
 At the end of every response, put a status marker on its own final line:\n\
-- `✅` when the task is complete and you need nothing from me.\n\
-- `⏳` when you are waiting on me (a question, a decision, or confirmation).\n";
+- `●` when the task is complete and you need nothing from me.\n\
+- `○` when you are waiting on me (a question, a decision, or confirmation).\n";
 
 fn claude_md_path() -> std::path::PathBuf {
     home().join(".claude").join("CLAUDE.md")
@@ -173,7 +173,7 @@ fn claude_md_path() -> std::path::PathBuf {
 /// True if the global CLAUDE.md already carries a turn-marker instruction (so we don't offer again).
 pub fn claude_md_has_markers() -> bool {
     std::fs::read_to_string(claude_md_path())
-        .map(|s| s.contains(MARKER_SENTINEL) || (s.contains('⏳') && s.contains('✅')))
+        .map(|s| s.contains(MARKER_SENTINEL) || (s.contains('○') && s.contains('●')))
         .unwrap_or(false)
 }
 

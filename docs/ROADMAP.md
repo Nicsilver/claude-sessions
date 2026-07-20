@@ -29,7 +29,7 @@ Unit tests cover the invariant-critical logic:
   unrelated hooks (e.g. "awake") are never matched as ours.
 - the fuzzy WT tab matching, extracted into the platform-independent `terminals/tabmatch.rs`
   (token overlap, exact-title win, single generic "Claude Code" fallback, don't-guess-on-a-tie).
-- the ⏳/✅ turn-marker parsing (`classify_turn_text` in `recorder.rs`).
+- the ●/○ turn-marker parsing (`classify_turn_text` in `recorder.rs`).
 
 ## 4. Auto-hide / auto-show (two independent options)  ✅ done
 

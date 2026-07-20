@@ -38,7 +38,7 @@ One binary: GUI, hook recorder and installer in one (~6 MB, Rust + [Tauri](https
 
 To make it permanent, run `claude-sessions install-app` once. It copies the binary to a stable per-user location (`%LOCALAPPDATA%\ClaudeSessions` on Windows, `~/Library/Application Support/ClaudeSessions` on macOS), turns on launch at login, and relaunches from there. `claude-sessions uninstall-app` reverses it. Ticking **Start at login** in the options works too, but then keep the binary where it is: launch-at-login points at its current folder.
 
-Optionally, `claude-sessions markers` (also in the tray menu) adds a small instruction to your global `CLAUDE.md` that makes Claude end each reply with ✅ or ⏳, which sharpens the *done* vs *your turn* distinction.
+Optionally, `claude-sessions markers` (also in the tray menu) adds a small instruction to your global `CLAUDE.md` that makes Claude end each reply with ● or ○, which sharpens the *done* vs *your turn* distinction.
 
 ## Using it
 

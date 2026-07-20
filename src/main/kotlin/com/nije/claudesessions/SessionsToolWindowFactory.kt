@@ -89,9 +89,12 @@ private class SessionRenderer : DefaultListCellRenderer() {
     ): Component {
         val c = super.getListCellRendererComponent(list, value, index, selected, focused) as JLabel
         val s = value as? Session ?: return c
+        // Geometric dots in the claude-sessions style — colour (set on the row foreground below)
+        // carries the state; shape echoes the transcript markers: filled ● = has output / needs
+        // attention, hollow ○ = waiting or dormant, half ◐ = actively working.
         val glyph = when (s.state) {
-            "needs" -> "🔴"; "yourturn" -> "🟡"; "working" -> "🟢"
-            "done" -> "✅"; else -> "⚪"
+            "needs" -> "●"; "yourturn" -> "○"; "working" -> "◐"
+            "done" -> "●"; else -> "○"
         }
         val name = if (s.tty.isEmpty()) "${s.topic} (ide)" else s.topic
         val state = when (s.state) {
