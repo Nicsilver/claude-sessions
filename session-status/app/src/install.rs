@@ -161,10 +161,23 @@ fn backup(path: &Path) {
 // ---- optional: the ●/○ turn-marker instruction in the global CLAUDE.md ----
 
 const MARKER_SENTINEL: &str = "claude-sessions: turn markers";
-const MARKER_SNIPPET: &str = "\n\n<!-- claude-sessions: turn markers -->\n\
-At the end of every response, put a status marker on its own final line:\n\
-- `●` when the task is complete and you need nothing from me.\n\
-- `○` when you are waiting on me (a question, a decision, or confirmation).\n";
+const MARKER_SNIPPET: &str = r#"
+
+<!-- claude-sessions: turn markers -->
+## Session-status marker (end every response with one)
+
+A session-status dashboard reads the transcript to tell, at a glance, which sessions are waiting on me. To make that reliable, **end every response with a status marker on its own final line — nothing after it:**
+
+- `○` — the ball is in my court: you asked a question, greeted me, offered options/choices, or need a decision, approval, or any reply from me before the conversation moves on. **When in doubt, use this.**
+- `●` — you completed the work I asked for and nothing is pending from me; the session is safe to close.
+
+Rules of thumb:
+- A greeting or "what would you like to work on?" is `○`, **never** `●` — you're waiting on me.
+- An open question or an offer ("want me to…?") is `○`.
+- `●` is only for a turn that actually *finished a task* with nothing left for me to answer or decide.
+
+Use exactly one, every turn, as the very last line.
+"#;
 
 fn claude_md_path() -> std::path::PathBuf {
     home().join(".claude").join("CLAUDE.md")
