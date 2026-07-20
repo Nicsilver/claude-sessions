@@ -94,3 +94,8 @@ jobs:
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
             || gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
           gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+          # --clobber only replaces same-named files; when an asset name changes between
+          # runs of the same tag (e.g. a version-numbered plugin zip), the old one lingers.
+          gh release view "${GITHUB_REF_NAME}" --json assets -q '.assets[].name' | while read -r name; do
+            [[ -e "dist/${name}" ]] || gh release delete-asset "${GITHUB_REF_NAME}" "${name}" --yes
+          done
