@@ -344,12 +344,19 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
 });
 
 let sessions = [];
+let renderedSessions = [];  // sessions actually drawn (post optimistic-close filter), in DOM order
 let mouseX = -1;       // last cursor X — re-applied after re-renders so the hover bloom doesn't recenter
 let renaming = null;   // session id currently being renamed inline
 let settingsOpen = false;
 let lastH = 0;
 let hkJump = "";       // global-hotkey accelerators (loaded from config, edited in the options pane)
 let hkNew = "";
+
+// Optimistically-closed sessions: id → grace timer. Right-clicking a row hides it instantly and
+// starts a timer; the row stays hidden until the backend confirms the close (id drops out of the
+// session list) or the timer fires — in which case the close didn't take and the row comes back.
+const pendingClose = new Map();
+const CLOSE_GRACE_MS = 4000;
 
 
 function ageStr(ts) {
@@ -372,13 +379,16 @@ function metaFor(s) {
 
 function render() {
   if (settingsOpen) return;
+  reconcileClosing();                                   // finalise closes the backend already confirmed
   const list = document.getElementById("list");
   list.innerHTML = "";
-  if (!sessions.length) {
+  const visible = sessions.filter(s => !pendingClose.has(s.id));
+  renderedSessions = visible;
+  if (!visible.length) {
     list.innerHTML = '<div id="empty">No active sessions</div>';
   }
   const now = Date.now() / 1000;
-  for (const s of sessions) {
+  for (const s of visible) {
     const muted = s.mute_until > now;
     const active = ACTIVE.has(s.state);
     const row = document.createElement("div");
@@ -437,8 +447,7 @@ function render() {
     });
     row.addEventListener("contextmenu", e => {        // right-click → close the session
       e.preventDefault();
-      invoke("close_session", { id: s.id });
-      setTimeout(refresh, 600);
+      closeOptimistically(s.id);
     });
     list.appendChild(row);
   }
@@ -449,16 +458,38 @@ function render() {
       r.style.setProperty("--mx", (mouseX - r.getBoundingClientRect().left) + "px");
     }
   }
-  renderChips();
+  renderChips(visible);
   fitHeight();
 }
 
-function renderChips() {
+// Right-click close, made to feel instant. Fire the real close, hide the row now (render() filters
+// out pendingClose ids), and pull fresh state so a fast close finalises without waiting for the
+// 1.5s heartbeat. The grace timer is the safety net: if the session is somehow still alive when it
+// fires, drop it from pendingClose and re-render so the row reappears rather than being lost.
+function closeOptimistically(id) {
+  invoke("close_session", { id });
+  if (pendingClose.has(id)) clearTimeout(pendingClose.get(id));
+  pendingClose.set(id, setTimeout(() => { pendingClose.delete(id); render(); }, CLOSE_GRACE_MS));
+  render();
+  refresh();
+}
+
+// A pending close is confirmed once its id is gone from the backend list (model::load() drops a
+// session when its Claude process dies). Clear the timer so nothing un-hides it later.
+function reconcileClosing() {
+  if (!pendingClose.size) return;
+  const live = new Set(sessions.map(s => s.id));
+  for (const [id, timer] of pendingClose) {
+    if (!live.has(id)) { clearTimeout(timer); pendingClose.delete(id); }
+  }
+}
+
+function renderChips(list) {
   const keys = ["needs", "yourturn", "working", "done"];
   const el = document.getElementById("chips");
   el.innerHTML = "";
   for (const key of keys) {
-    const n = sessions.filter(s => s.state === key).length;
+    const n = list.filter(s => s.state === key).length;
     const chip = document.createElement("div");
     chip.className = "chip" + (n ? "" : " zero");
     const dot = document.createElement("div");
@@ -596,7 +627,7 @@ bindShortcut(document.getElementById("hk-new"),  () => hkNew,  v => hkNew  = v);
 listen("sessions", e => { sessions = e.payload; render(); });
 setInterval(() => {                                   // tick ages between pushes
   document.querySelectorAll(".row .meta").forEach((m, i) => {
-    if (sessions[i]) m.textContent = metaFor(sessions[i]);
+    if (renderedSessions[i]) m.textContent = metaFor(renderedSessions[i]);
   });
 }, 1000);
 applyTheme("system");                                 // populate COLORS before the first render
