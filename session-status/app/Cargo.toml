@@ -49,6 +49,11 @@ windows-sys = { version = "0.59", features = [
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Opt out of App Nap (NSProcessInfo activity) so the background dashboard keeps repainting — hover
+# glow, live updates — while another app is focused. Version matches what the tauri tree compiles.
+objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSString"] }
+
 [profile.release]
 opt-level = "z"
 lto = true

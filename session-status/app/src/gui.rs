@@ -44,7 +44,10 @@ pub fn run() -> tauri::Result<()> {
         .setup(|app| {
             // Menu-bar-only app: no Dock icon, no app switcher entry.
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            {
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                prevent_app_nap();
+            }
             setup_tray(app.handle())?;
             register_hotkeys(app.handle());
             // Auto-hide is a level check exactly once, at startup: launching at login with
@@ -81,6 +84,27 @@ pub fn run() -> tauri::Result<()> {
         })
         .run(tauri::generate_context!())?;
     Ok(())
+}
+
+/// Opt this process out of macOS App Nap. Without it, once another app takes focus the OS throttles
+/// our run loop and compositor, so the dashboard's hover glow and live updates crawl while it sits
+/// in the background — staying responsive there is the whole point of the widget. The
+/// AllowingIdleSystemSleep variant exempts only this process; the Mac still sleeps normally when
+/// idle. The activity token must outlive the process, so it's leaked deliberately.
+/// Opt this process out of macOS App Nap. Without it, once another app takes focus the OS throttles
+/// our run loop and compositor, so the dashboard's hover glow and live updates crawl while it sits
+/// in the background — staying responsive there is the whole point of the widget. The
+/// AllowingIdleSystemSleep variant exempts only this process; the Mac still sleeps normally when
+/// idle. The activity token must outlive the process, so it's leaked deliberately.
+#[cfg(target_os = "macos")]
+fn prevent_app_nap() {
+    use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
+    let reason = NSString::from_str("Live Claude session status");
+    let token = NSProcessInfo::processInfo().beginActivityWithOptions_reason(
+        NSActivityOptions::UserInitiatedAllowingIdleSystemSleep,
+        &reason,
+    );
+    std::mem::forget(token);
 }
 
 /// Pin the panel to the monitor's top-right. The html has a 14px shadow gutter, so a 6px
