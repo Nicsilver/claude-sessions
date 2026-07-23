@@ -153,12 +153,33 @@ object TerminalJump {
         return null
     }
 
-    private fun ttyOfPid(pid: Long): String = try {
+    /** pid → controlling tty. A shell's tty never changes, so resolve once and cache.
+     *  Resolving forks `ps`, which can stall 100ms+ under memory pressure — forking on the
+     *  EDT froze the whole IDE (typing stutter every publish tick), so a cache miss on the
+     *  EDT resolves on a pooled thread instead and callers pick the value up next tick. */
+    private val ttyCache = java.util.concurrent.ConcurrentHashMap<Long, String>()
+    private val ttyPending = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+
+    private fun ttyOfPid(pid: Long): String {
+        ttyCache[pid]?.let { return it }
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        if (app.isDispatchThread) {
+            if (ttyPending.add(pid)) {
+                app.executeOnPooledThread {
+                    try { lookupTty(pid)?.let { ttyCache[pid] = it } } finally { ttyPending.remove(pid) }
+                }
+            }
+            return ""
+        }
+        return lookupTty(pid)?.also { ttyCache[pid] = it } ?: ""
+    }
+
+    private fun lookupTty(pid: Long): String? = try {
         val p = ProcessBuilder("ps", "-o", "tty=", "-p", "$pid").redirectErrorStream(true).start()
         val out = p.inputStream.bufferedReader().readText().trim()
-        if (out == "??" || out == "?") "" else out
+        if (out.isEmpty() || out == "??" || out == "?") null else out
     } catch (e: Exception) {
-        ""
+        null
     }
 
     private fun norm(tty: String) = tty.removePrefix("tty")

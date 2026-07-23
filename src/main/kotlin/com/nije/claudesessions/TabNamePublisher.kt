@@ -32,12 +32,16 @@ object TabNamePublisher {
                 map[tty] = mapOf("name" to name, "ts" to now, "auto" to (name == TabNamer.appliedName(tty)))
             }
         }
-        runCatching {
-            dir.mkdirs()
-            val out = File(dir, project.locationHash + ".json")
-            val tmp = File(dir, project.locationHash + ".json.tmp")
-            tmp.writeText(gson.toJson(map))
-            tmp.renameTo(out)
+        // Runs on the EDT (widget access requires it) — push the file write off it.
+        val hash = project.locationHash
+        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                dir.mkdirs()
+                val out = File(dir, "$hash.json")
+                val tmp = File(dir, "$hash.json.tmp")
+                tmp.writeText(gson.toJson(map))
+                tmp.renameTo(out)
+            }
         }
     }
 }

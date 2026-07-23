@@ -18,18 +18,29 @@ class FocusWatcher : ProjectActivity {
 
     override suspend fun execute(project: Project) {
         val file = File(System.getProperty("user.home"), ".claude/session-status/focus-request.json")
-        var lastTs = 0.0
+        // Swallow whatever request is already on disk: without this, a leftover close/focus
+        // request replays once every time a project opens (a stale "close" kills a tab).
+        var lastTs = read(file)?.ts ?: 0.0
+        var lastMod = file.lastModified()
         var tick = 0
         while (true) {
             delay(100)   // was 400ms; tighter poll so a click registers near-instantly
             // Every ~2s: name tabs after their sessions, then republish the tty→tab-name map
             // for the recorder.
             if (tick++ % 20 == 0) {
+                // Disk reads happen here in the coroutine; the EDT part is widget/tab access
+                // only (ttys come from TerminalJump's cache, so no forks on the EDT either).
+                val topics = TabNamer.readTopics()
                 ApplicationManager.getApplication().invokeLater {
-                    TabNamer.apply(project)
+                    TabNamer.apply(project, topics)
                     TabNamePublisher.publish(project)
                 }
             }
+            // Parse only when the file actually changed — a stat every 100ms is free, a
+            // read+JSON-parse every 100ms is not. The ts guard below still dedupes.
+            val mod = file.lastModified()
+            if (mod == lastMod) continue
+            lastMod = mod
             val req = read(file) ?: continue
             if (req.ts <= lastTs) continue
             lastTs = req.ts

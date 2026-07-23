@@ -64,13 +64,27 @@ pub fn run() -> tauri::Result<()> {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let mut prev = startup;
+                let mut tray_cache = None;
+                let mut last_emitted: Option<Vec<Value>> = None;
                 loop {
                     let sessions = model::load();
-                    update_tray(&handle, &sessions);
-                    let _ = handle.emit("sessions", to_json(&sessions));
+                    update_tray(&handle, &sessions, &mut tray_cache);
                     let pulse = Pulse::of(&sessions);
                     apply_auto_visibility(&handle, &prev, &pulse);
                     prev = pulse;
+                    // Emit only when the payload changed AND the panel can see it — every
+                    // emit costs a WKWebView wake + full DOM rebuild on the JS side. A tick
+                    // skipped while hidden self-heals: last_emitted stays stale, so the
+                    // first visible tick after a change emits.
+                    let visible = handle
+                        .get_webview_window("main")
+                        .and_then(|w| w.is_visible().ok())
+                        .unwrap_or(true);
+                    let payload = to_json(&sessions);
+                    if visible && last_emitted.as_ref() != Some(&payload) {
+                        let _ = handle.emit("sessions", payload.clone());
+                        last_emitted = Some(payload);
+                    }
                     std::thread::sleep(Duration::from_millis(1500));
                 }
             });
@@ -320,7 +334,11 @@ fn menu_action(app: tauri::AppHandle, id: String) {
     }
 }
 
-fn update_tray(app: &tauri::AppHandle, sessions: &[model::Sess]) {
+fn update_tray(
+    app: &tauri::AppHandle,
+    sessions: &[model::Sess],
+    cache: &mut Option<(usize, usize, usize)>,
+) {
     let Some(tray) = app.tray_by_id("main") else {
         return;
     };
@@ -328,6 +346,12 @@ fn update_tray(app: &tauri::AppHandle, sessions: &[model::Sess]) {
     let active: Vec<&model::Sess> = sessions.iter().filter(|s| s.mute_until <= now).collect();
     let count = |st: &str| active.iter().filter(|s| s.state == st).count();
     let (needs, yt, wk) = (count("needs"), count("yourturn"), count("working"));
+    // Icon + tooltip derive entirely from these three counts — skip the 1024-px badge
+    // render and the two tray syscalls when they haven't moved since last tick.
+    if *cache == Some((needs, yt, wk)) {
+        return;
+    }
+    *cache = Some((needs, yt, wk));
     let (top, n) = if needs > 0 {
         ("needs", needs)
     } else if yt > 0 {

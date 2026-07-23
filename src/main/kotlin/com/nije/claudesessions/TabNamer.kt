@@ -30,15 +30,16 @@ object TabNamer {
      *  lets the publisher flag auto names so the recorder won't echo them back as labels. */
     fun appliedName(tty: String): String? = applied[tty]
 
-    fun apply(project: Project) {
+    /** Widget/tab access needs the EDT, but the state-file reads don't — callers on a
+     *  background thread pass [readTopics]' result in so no disk I/O runs on the EDT. */
+    fun apply(project: Project, topics: Map<String, String> = readTopics()) {
+        if (topics.isEmpty()) return
         val mgr = TerminalToolWindowManager.getInstance(project)
         val widgets = runCatching { mgr.terminalWidgets }.getOrNull() ?: return
         if (widgets.isEmpty()) return
-        val topics = topicsByTty()
-        if (topics.isEmpty()) return
         for (w in widgets) {
             val tty = TerminalJump.ttyOf(w)
-            val name = topics[tty]?.let(::shorten) ?: continue
+            val name = topics[tty] ?: continue
             val content = runCatching { mgr.getContainer(w)?.content }.getOrNull() ?: continue
             val cur = content.displayName?.trim().orEmpty()
             if (cur == name) {
@@ -75,9 +76,8 @@ object TabNamer {
             || base.equals("claude", ignoreCase = true)
     }
 
-    /** tty → session topic from the recorder's state files (topic is already length-capped
-     *  by the recorder's label heuristics). */
-    private fun topicsByTty(): Map<String, String> {
+    /** tty → tab display name from the recorder's state files: the shortened session topic. */
+    fun readTopics(): Map<String, String> {
         val files = stateDir.listFiles { f -> f.name.endsWith(".json") } ?: return emptyMap()
         val map = HashMap<String, String>()
         for (f in files) {
@@ -85,7 +85,7 @@ object TabNamer {
                 val o = JsonParser.parseString(f.readText()).asJsonObject
                 val tty = o.get("tty")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
                 val topic = o.get("topic")?.takeIf { !it.isJsonNull }?.asString.orEmpty().trim()
-                if (tty.isNotEmpty() && topic.isNotEmpty()) map[tty] = topic
+                if (tty.isNotEmpty() && topic.isNotEmpty()) map[tty] = shorten(topic)
             }
         }
         return map
