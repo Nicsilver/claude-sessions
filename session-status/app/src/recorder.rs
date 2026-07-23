@@ -34,11 +34,12 @@ pub fn record(state: &str) {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(ai_label_path(&sid));
         let _ = std::fs::remove_file(ai_pending_path(&sid));
+        remember_cc_name(&sid, None);
         return;
     }
 
     let prev = load_json(&path);
-    let reg = registry_for(&sid);
+    let (reg, reg_path) = registry_for(&sid);
 
     let cwd = first_nonempty(&[
         str_of(&reg, "cwd"),
@@ -86,6 +87,14 @@ pub fn record(state: &str) {
         if !d.is_empty() {
             topic = d;
         }
+    }
+    // Only curated labels (manual > command > AI) are pushed into Claude Code — the blunt
+    // fallbacks (branch, prompt cut) are no better than CC's own auto-names.
+    let curated = custom_label(&sid).is_some_and(|c| c == topic)
+        || (!cmd_label.is_empty() && cmd_label == topic)
+        || (!ai_label.is_empty() && ai_label == topic);
+    if curated {
+        sync_cc_name(&sid, &reg, reg_path.as_deref(), &transcript, &topic);
     }
 
     let mut eff = if state == "start" {
@@ -232,9 +241,14 @@ fn derive_label(
         return c;
     }
     // Claude Code ≥2.1 auto-names every session ("fullstack-a4", nameSource "derived") —
-    // worthless as a label. Only honour registry names the user set (e.g. /rename).
+    // worthless as a label. Only honour registry names the user set (e.g. /rename); a name
+    // this recorder synced back into CC is an echo, not a user choice, and must not outrank
+    // the label sources it mirrors.
     let reg_name = str_of(reg, "name");
-    if !reg_name.trim().is_empty() && str_of(reg, "nameSource") != "derived" {
+    if !reg_name.trim().is_empty()
+        && str_of(reg, "nameSource") != "derived"
+        && cc_applied_name(sid).as_deref() != Some(reg_name.trim())
+    {
         return reg_name.trim().to_string();
     }
     if !cmd_label.is_empty() {
@@ -266,6 +280,98 @@ fn derive_label(
     } else {
         base
     }
+}
+
+// ---- Claude Code name sync ----
+//
+// Curated labels are pushed back into Claude Code itself so /resume and the session list
+// show them too: the live-session registry name (what /rename sets) plus a custom-title
+// transcript entry (what /resume reads for past sessions). Default on; "cc_name_sync": false
+// in config.json disables it. Same never-clobber rule as the IDE TabNamer: only a derived
+// auto-name or a name this recorder set previously is ever overwritten — a real /rename wins.
+
+fn cc_sync_enabled() -> bool {
+    load_json(&config_path())
+        .get("cc_name_sync")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+fn cc_applied_path() -> std::path::PathBuf {
+    base().join("cc-names-applied.json")
+}
+
+/// The name this recorder last synced into CC for [sid], if any.
+fn cc_applied_name(sid: &str) -> Option<String> {
+    let v = load_json(&cc_applied_path());
+    let s = v.get(sid)?.as_str()?.trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn remember_cc_name(sid: &str, name: Option<&str>) {
+    let mut v = load_json(&cc_applied_path());
+    if !v.is_object() {
+        v = Value::Object(Map::new());
+    }
+    let Some(m) = v.as_object_mut() else { return };
+    match name {
+        Some(n) => {
+            m.insert(sid.to_string(), json!(n));
+        }
+        None => {
+            if m.remove(sid).is_none() {
+                return; // nothing to persist
+            }
+        }
+    }
+    write_atomic(&cc_applied_path(), &v);
+}
+
+fn sync_cc_name(
+    sid: &str,
+    reg: &Value,
+    reg_path: Option<&std::path::Path>,
+    transcript: &str,
+    topic: &str,
+) {
+    if topic.is_empty() || !cc_sync_enabled() {
+        return;
+    }
+    let ours = cc_applied_name(sid);
+    if ours.as_deref() == Some(topic) {
+        return; // already synced
+    }
+    // A registry name we didn't write and CC didn't derive is a real /rename — hands off.
+    let reg_name = str_of(reg, "name");
+    if !reg_name.trim().is_empty()
+        && str_of(reg, "nameSource") != "derived"
+        && ours.as_deref() != Some(reg_name.trim())
+    {
+        return;
+    }
+    if let Some(p) = reg_path {
+        let mut v = load_json(p);
+        if let Some(m) = v.as_object_mut() {
+            m.insert("name".into(), json!(topic));
+            m.insert("nameSource".into(), json!("user"));
+            write_atomic(p, &v);
+        }
+    }
+    if !transcript.is_empty() {
+        let p = expand_user(transcript);
+        if p.is_file() {
+            use std::io::Write;
+            let line = json!({"type": "custom-title", "customTitle": topic, "sessionId": sid});
+            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&p) {
+                let _ = writeln!(f, "{line}");
+            }
+        }
+    }
+    remember_cc_name(sid, Some(topic));
 }
 
 // ---- AI labels (opt-in: "ai_labels": true in config.json) ----
@@ -594,11 +700,11 @@ fn url_number(t: &str) -> Option<String> {
     None
 }
 
-fn registry_for(sid: &str) -> Value {
-    let mut best: Option<Value> = None;
+fn registry_for(sid: &str) -> (Value, Option<std::path::PathBuf>) {
+    let mut best: Option<(Value, std::path::PathBuf)> = None;
     let mut best_updated = f64::MIN;
     let Ok(entries) = std::fs::read_dir(sessions_dir()) else {
-        return Value::Null;
+        return (Value::Null, None);
     };
     for e in entries.flatten() {
         if e.path().extension().and_then(|s| s.to_str()) != Some("json") {
@@ -616,10 +722,13 @@ fn registry_for(sid: &str) -> Value {
         let up = f64_of(&v, "updatedAt");
         if best.is_none() || up > best_updated {
             best_updated = up;
-            best = Some(v);
+            best = Some((v, e.path()));
         }
     }
-    best.unwrap_or(Value::Null)
+    match best {
+        Some((v, p)) => (v, Some(p)),
+        None => (Value::Null, None),
+    }
 }
 
 fn transcript_titles(path: &str) -> (String, String) {
