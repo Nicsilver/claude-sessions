@@ -470,8 +470,8 @@ mod imp {
     pub fn attach_parent_console() {} // unix CLIs already share the terminal's stdio
 }
 
-pub use imp::{annotate, attach_parent_console, is_alive, parent_pid};
 #[cfg(any(windows, target_os = "macos"))]
 pub use imp::process_map;
+pub use imp::{annotate, attach_parent_console, is_alive, parent_pid};
 #[cfg(windows)]
 pub use imp::{focus_window, main_window_for_pid};

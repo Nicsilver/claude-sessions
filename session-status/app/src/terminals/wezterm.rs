@@ -18,9 +18,9 @@ use super::tabmatch::{self, Target};
 use super::Terminal;
 use crate::model::Sess;
 use crate::paths::home;
-use crate::platform::{is_alive, process_map};
 #[cfg(windows)]
 use crate::platform::{focus_window, main_window_for_pid};
+use crate::platform::{is_alive, process_map};
 use serde_json::Value;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;

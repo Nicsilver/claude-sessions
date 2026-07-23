@@ -351,7 +351,10 @@ mod tests {
     #[test]
     fn marker_status_detects_missing_current_and_outdated() {
         assert_eq!(marker_status_of(""), MarkerStatus::Missing);
-        assert_eq!(marker_status_of("# my rules\nbe nice"), MarkerStatus::Missing);
+        assert_eq!(
+            marker_status_of("# my rules\nbe nice"),
+            MarkerStatus::Missing
+        );
         // A sentinel that predates versioning is v1 → outdated.
         assert_eq!(
             marker_status_of("<!-- claude-sessions: turn markers -->\n## Session-status marker"),
@@ -381,7 +384,9 @@ mod tests {
              (end every response with one)\nold body\n{MARKER_END}\n\n## Other rules\nkeep me\n"
         );
         let new = replace_marker_block(&old).unwrap();
-        assert!(new.starts_with("# Global instructions\n\n<!-- claude-sessions: turn markers v2 -->"));
+        assert!(
+            new.starts_with("# Global instructions\n\n<!-- claude-sessions: turn markers v2 -->")
+        );
         assert!(new.contains('◐'));
         assert!(!new.contains("old body"));
         assert!(new.ends_with("\n\n## Other rules\nkeep me\n"));
@@ -395,7 +400,10 @@ mod tests {
         assert!(up.ends_with("\ntail"));
 
         // A heavily customized block without the closing line is left alone.
-        assert_eq!(replace_marker_block("## Session-status marker\ncustom stuff"), None);
+        assert_eq!(
+            replace_marker_block("## Session-status marker\ncustom stuff"),
+            None
+        );
     }
 
     #[test]
