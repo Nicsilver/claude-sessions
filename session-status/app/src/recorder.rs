@@ -68,14 +68,27 @@ pub fn record(state: &str) {
         }
     }
     let ai_label = read_ai_label(&sid);
-    if ai_label.is_empty()
+    // Prompts since the current AI label was minted — a session that has drifted far enough
+    // from its label earns one fresh naming call (the pivot re-label).
+    let mut since = i64_of(&prev, "prompts_since_label");
+    if ai_label != str_of(&prev, "ai_label") {
+        since = 0;
+    }
+    if state == "working" && has_prompt && wants_ai_label(&prompt) {
+        since += 1;
+    }
+    let relabel_after = relabel_after();
+    let pivoted = relabel_after > 0 && !ai_label.is_empty() && since >= relabel_after;
+    if (ai_label.is_empty() || pivoted)
         && cmd_label.is_empty()
         && has_prompt
         && ai_labels_enabled()
         && custom_label(&sid).is_none()
+        && !user_named(&reg, &sid)
         && wants_ai_label(&prompt)
     {
         spawn_ai_labeler(&sid, &prompt);
+        since = 0;
     }
     if custom_label(&sid).is_some()
         || topic.is_empty()
@@ -128,6 +141,8 @@ pub fn record(state: &str) {
     rec.insert("topic".into(), json!(topic));
     rec.insert("cmd_label".into(), json!(cmd_label));
     rec.insert("ai_label".into(), json!(ai_label));
+    rec.insert("prompts_since_label".into(), json!(since));
+    rec.insert("transcript".into(), json!(transcript));
     rec.insert("cwd".into(), json!(cwd));
     rec.insert("pid".into(), json!(pid));
     rec.insert("ppid".into(), json!(self_ppid));
@@ -244,12 +259,8 @@ fn derive_label(
     // worthless as a label. Only honour registry names the user set (e.g. /rename); a name
     // this recorder synced back into CC is an echo, not a user choice, and must not outrank
     // the label sources it mirrors.
-    let reg_name = str_of(reg, "name");
-    if !reg_name.trim().is_empty()
-        && str_of(reg, "nameSource") != "derived"
-        && cc_applied_name(sid).as_deref() != Some(reg_name.trim())
-    {
-        return reg_name.trim().to_string();
+    if user_named(reg, sid) {
+        return str_of(reg, "name").trim().to_string();
     }
     if !cmd_label.is_empty() {
         return cmd_label.to_string();
@@ -295,6 +306,24 @@ fn cc_sync_enabled() -> bool {
         .get("cc_name_sync")
         .and_then(Value::as_bool)
         .unwrap_or(true)
+}
+
+/// True when the registry name is a genuine user choice (e.g. /rename) — not CC's derived
+/// auto-name and not an echo this recorder synced back.
+fn user_named(reg: &Value, sid: &str) -> bool {
+    let name = str_of(reg, "name");
+    !name.trim().is_empty()
+        && str_of(reg, "nameSource") != "derived"
+        && cc_applied_name(sid).as_deref() != Some(name.trim())
+}
+
+/// Prompts after which a drifted AI-labeled session earns one fresh naming call. 0 disables
+/// the pivot re-label; "ai_relabel_prompts" in config.json overrides the default of 10.
+fn relabel_after() -> i64 {
+    load_json(&config_path())
+        .get("ai_relabel_prompts")
+        .and_then(Value::as_i64)
+        .unwrap_or(10)
 }
 
 fn cc_applied_path() -> std::path::PathBuf {
@@ -346,11 +375,7 @@ fn sync_cc_name(
         return; // already synced
     }
     // A registry name we didn't write and CC didn't derive is a real /rename — hands off.
-    let reg_name = str_of(reg, "name");
-    if !reg_name.trim().is_empty()
-        && str_of(reg, "nameSource") != "derived"
-        && ours.as_deref() != Some(reg_name.trim())
-    {
+    if user_named(reg, sid) {
         return;
     }
     if let Some(p) = reg_path {
@@ -406,30 +431,37 @@ fn wants_ai_label(prompt: &str) -> bool {
     !p.starts_with('/') && is_substantial(p)
 }
 
-/// Fire-and-forget: claim the pending file (the concurrency guard), then respawn ourselves as
-/// `ai-label <sid>` fully detached so the hook returns immediately.
-fn spawn_ai_labeler(sid: &str, prompt: &str) {
+/// One labeler at a time per session: claim the pending file, taking over a stale claim
+/// (crashed labeler) after 3min.
+fn claim_pending(sid: &str) -> bool {
     if std::fs::create_dir_all(ai_labels_dir()).is_err() {
-        return;
+        return false;
     }
     let pending = ai_pending_path(sid);
-    let claimed = std::fs::OpenOptions::new()
+    if std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&pending)
-        .is_ok();
-    if !claimed {
-        // A stale claim (crashed labeler) may hold the slot forever — take it over after 3min.
-        let fresh = std::fs::metadata(&pending)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.elapsed().ok())
-            .map(|age| age.as_secs() < 180)
-            .unwrap_or(true);
-        if fresh {
-            return;
-        }
+        .is_ok()
+    {
+        return true;
     }
+    let fresh = std::fs::metadata(&pending)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .map(|age| age.as_secs() < 180)
+        .unwrap_or(true);
+    !fresh
+}
+
+/// Fire-and-forget: claim the pending file (the concurrency guard), then respawn ourselves as
+/// `ai-label <sid>` fully detached so the hook returns immediately.
+fn spawn_ai_labeler(sid: &str, prompt: &str) {
+    if !claim_pending(sid) {
+        return;
+    }
+    let pending = ai_pending_path(sid);
     let excerpt: String = prompt.chars().take(2000).collect();
     if std::fs::write(&pending, excerpt).is_err() {
         let _ = std::fs::remove_file(&pending);
@@ -449,14 +481,29 @@ fn spawn_ai_labeler(sid: &str, prompt: &str) {
 
 /// The detached child: ask a small model for a label and store it. Runs outside any hook, so
 /// latency is free; the marker env stops the nested claude's own hooks from recording it.
-pub fn run_ai_label(sid: &str) {
+/// `force` is the on-demand path (shift-click in the dashboard): context comes from the
+/// session's transcript instead of a pending prompt, and the result lands at custom (top)
+/// priority and is pushed through every surface immediately.
+pub fn run_ai_label(sid: &str, force: bool) {
     if sid.is_empty() {
         return;
     }
     let pending = ai_pending_path(sid);
-    let Ok(excerpt) = std::fs::read_to_string(&pending) else {
-        return;
+    let excerpt = if force {
+        if !claim_pending(sid) {
+            return;
+        }
+        transcript_excerpt(sid)
+    } else {
+        let Ok(e) = std::fs::read_to_string(&pending) else {
+            return;
+        };
+        e
     };
+    if excerpt.trim().is_empty() {
+        let _ = std::fs::remove_file(&pending);
+        return;
+    }
     let cfg = load_json(&config_path());
     let model = {
         let m = str_of(&cfg, "ai_label_model");
@@ -483,13 +530,76 @@ pub fn run_ai_label(sid: &str) {
     if let Ok(out) = cmd.output() {
         let label = clean_ai_label(&String::from_utf8_lossy(&out.stdout));
         if !label.is_empty() {
-            write_atomic(
-                &ai_label_path(sid),
-                &json!({"label": label, "ts": unix_now()}),
-            );
+            if force {
+                apply_forced_label(sid, &label);
+            } else {
+                write_atomic(
+                    &ai_label_path(sid),
+                    &json!({"label": label, "ts": unix_now()}),
+                );
+            }
         }
     }
     let _ = std::fs::remove_file(&pending);
+}
+
+/// Last few substantial user messages from the session's transcript (path recorded in the
+/// state file) — the naming context for an on-demand rename.
+fn transcript_excerpt(sid: &str) -> String {
+    let st = load_json(&state_dir().join(format!("{sid}.json")));
+    let path = str_of(&st, "transcript");
+    if path.is_empty() {
+        return str_of(&st, "topic");
+    }
+    let mut msgs: Vec<String> = Vec::new();
+    for obj in read_tail_entries(&path, 262_144) {
+        if !obj.is_object() {
+            continue;
+        }
+        let m = if obj.get("message").map(Value::is_object).unwrap_or(false) {
+            obj.get("message").unwrap()
+        } else {
+            &obj
+        };
+        let role = {
+            let r = str_of(m, "role");
+            if r.is_empty() {
+                str_of(&obj, "type")
+            } else {
+                r
+            }
+        };
+        if role == "user" {
+            let txt = extract_text(m.get("content")).trim().replace('\n', " ");
+            if is_substantial(&txt) {
+                msgs.push(txt);
+            }
+        }
+    }
+    let recent = &msgs[msgs.len().saturating_sub(3)..];
+    recent.join("\n---\n").chars().take(2000).collect()
+}
+
+/// Forced rename: custom (top) priority, pushed through every surface now — an idle session
+/// may not fire another hook event for hours, so waiting for one would leave stale names.
+fn apply_forced_label(sid: &str, label: &str) {
+    let mut m = load_json(&labels_path());
+    if !m.is_object() {
+        m = Value::Object(Map::new());
+    }
+    if let Some(o) = m.as_object_mut() {
+        o.insert(sid.to_string(), json!(label));
+    }
+    write_atomic(&labels_path(), &m);
+    let sp = state_dir().join(format!("{sid}.json"));
+    let mut st = load_json(&sp);
+    let transcript = str_of(&st, "transcript");
+    if st.is_object() {
+        st["topic"] = json!(label);
+        write_atomic(&sp, &st);
+    }
+    let (reg, reg_path) = registry_for(sid);
+    sync_cc_name(sid, &reg, reg_path.as_deref(), &transcript, label);
 }
 
 /// Model output → tab-safe label: first meaningful line, stripped of wrapping quotes/backticks

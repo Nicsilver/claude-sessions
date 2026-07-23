@@ -23,9 +23,12 @@ fn main() {
             recorder::record(state);
             std::process::exit(0);
         }
-        // Spawned detached by the recorder — asks a small model to name a session, then exits.
+        // Spawned detached by the recorder (auto) or the dashboard's shift-click (--force) —
+        // asks a small model to name a session, then exits.
         Some("ai-label") => {
-            recorder::run_ai_label(args.get(1).map(String::as_str).unwrap_or(""));
+            let sid = args.get(1).map(String::as_str).unwrap_or("");
+            let force = args.get(2).map(String::as_str) == Some("--force");
+            recorder::run_ai_label(sid, force);
             std::process::exit(0);
         }
         // CLI subcommands attach the launching console first so their output is visible in

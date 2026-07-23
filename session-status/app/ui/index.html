@@ -440,6 +440,7 @@ function render() {
     row.addEventListener("click", e => {
       if (renaming) return;
       if (e.altKey) { renaming = s.id; render(); return; }
+      if (e.shiftKey) { invoke("ai_rename", { id: s.id }); return; }  // shift-click → AI name
       invoke("jump", { id: s.id });
     });
     row.addEventListener("auxclick", e => {           // middle-click → mute 1h

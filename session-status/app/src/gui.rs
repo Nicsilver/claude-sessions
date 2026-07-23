@@ -37,6 +37,7 @@ pub fn run() -> tauri::Result<()> {
             new_session,
             toggle_mute,
             rename,
+            ai_rename,
             menu_action,
             get_config,
             set_config
@@ -585,6 +586,21 @@ fn toggle_mute(id: String) {
 #[tauri::command]
 fn rename(id: String, name: String) {
     model::set_label(&id, &name);
+}
+
+/// Shift-click → have the AI labeler name this session from its transcript. Detached like the
+/// recorder's spawn: the model call takes seconds and the refresh loop shows the result.
+#[tauri::command]
+fn ai_rename(id: String) {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let _ = std::process::Command::new(exe)
+        .args(["ai-label", &id, "--force"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 #[cfg(test)]
