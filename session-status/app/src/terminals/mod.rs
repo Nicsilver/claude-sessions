@@ -12,6 +12,8 @@ mod macos_terminal;
 // unit tests run on every CI target.
 mod tabmatch;
 #[cfg(windows)]
+mod wezterm;
+#[cfg(windows)]
 mod wt;
 
 pub trait Terminal: Sync {
@@ -31,7 +33,7 @@ pub trait Terminal: Sync {
 fn registry() -> &'static [&'static dyn Terminal] {
     #[cfg(windows)]
     {
-        &[&wt::Wt, &jetbrains::JetBrains]
+        &[&wt::Wt, &wezterm::WezTerm, &jetbrains::JetBrains]
     }
     // jetbrains first: it is the default "open new sessions in" target on mac.
     #[cfg(target_os = "macos")]

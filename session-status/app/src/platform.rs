@@ -113,6 +113,11 @@ mod imp {
             }
         }
         for (p, n) in &chain {
+            if n == "wezterm-gui.exe" {
+                return ("wezterm".into(), *p);
+            }
+        }
+        for (p, n) in &chain {
             if JETBRAINS_EXES.contains(&n.as_str()) {
                 return ("jetbrains".into(), *p);
             }

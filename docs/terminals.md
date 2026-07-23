@@ -26,5 +26,7 @@ Useful fields on `Sess`: `pid` (the claude process), `term_pid` (the hosting ter
 process), `tab_title` + `topic` (for title-based tab matching — see `wt.rs` for a careful
 fuzzy matcher), `tty` (mac only).
 
-`wt.rs` (UI Automation + synthetic keystrokes) and `jetbrains.rs` (hands the work to the
-IntelliJ plugin via `focus-request.json`) are the two reference implementations.
+`wt.rs` (UI Automation + synthetic keystrokes), `wezterm.rs` (drives the terminal's own
+control CLI) and `jetbrains.rs` (hands the work to the IntelliJ plugin via
+`focus-request.json`) are the reference implementations — prefer the `wezterm.rs` shape
+whenever the terminal exposes a real CLI/API.
