@@ -66,10 +66,11 @@ fn main() {
                 }
             }
         }
-        // Append the optional ●/○ turn-marker instruction to the global CLAUDE.md.
+        // Add the optional ●/○/◐ turn-marker instruction to the global CLAUDE.md, or upgrade
+        // an outdated block in place.
         Some("markers") => {
             platform::attach_parent_console();
-            std::process::exit(if install::append_claude_md_markers() {
+            std::process::exit(if install::sync_claude_md_markers() {
                 0
             } else {
                 1

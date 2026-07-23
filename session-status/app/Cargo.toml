@@ -1,6 +1,6 @@
 [package]
 name = "claude-sessions"
-version = "0.15.0"
+version = "0.16.0"
 edition = "2021"
 description = "Claude Code session-status widget + hook recorder — one cross-platform binary (GUI, recorder, installer)"
 license = "AGPL-3.0"
@@ -23,6 +23,8 @@ tauri-plugin-global-shortcut = "2"
 # Launch-at-login — HKCU Run on Windows (Startup.cs analog), login item on macOS (SMAppService
 # analog). One plugin for both, toggled from the options pane.
 tauri-plugin-autostart = "2"
+# Native message boxes — the "turn markers changed, update CLAUDE.md?" startup offer.
+tauri-plugin-dialog = "2"
 # The crate tauri-plugin-autostart wraps; used directly by `install-app`/`uninstall-app` to
 # register autostart at an explicit (installed) path from the headless CLI, with the same app
 # name the plugin uses so the GUI toggle and the CLI manage one entry.

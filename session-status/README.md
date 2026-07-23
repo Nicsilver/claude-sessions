@@ -20,5 +20,7 @@ IPC; dead sessions are pruned by liveness-checking their PIDs.
 
 State → colour: `needs` (red — a prompt/permission), `yourturn` (yellow — waiting on you),
 `working` (green), `done` (grey). The `Notification` hook drives *needs*; the `Stop` hook decides
-*your turn* vs *done* from a `○`/`●` marker on the last line of Claude's reply (run
-`claude-sessions markers`, or see the turn-marker note in the root README).
+*your turn* vs *working* vs *done* from a `○`/`◐`/`●` marker on the last line of Claude's reply
+(run `claude-sessions markers`, or see the turn-marker note in the root README). `◐` covers the
+turn that ended only because background work (a build, a subagent, a watcher) is still running —
+the session stays green until that work reports back.

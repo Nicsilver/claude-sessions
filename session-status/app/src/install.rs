@@ -135,8 +135,8 @@ pub fn run(install: bool) -> i32 {
         println!("Start a NEW Claude session (or send a prompt) to populate the widget.");
         if !claude_md_has_markers() {
             println!();
-            println!("Optional: `claude-sessions markers` adds a turn-marker instruction (●/○)");
-            println!("to ~/.claude/CLAUDE.md so done/your-turn states are accurate.");
+            println!("Optional: `claude-sessions markers` adds a turn-marker instruction (●/○/◐)");
+            println!("to ~/.claude/CLAUDE.md so done/your-turn/working states are accurate.");
             println!("Also available from the tray icon's right-click menu.");
         }
     } else {
@@ -158,23 +158,34 @@ fn backup(path: &Path) {
     }
 }
 
-// ---- optional: the ●/○ turn-marker instruction in the global CLAUDE.md ----
+// ---- optional: the ●/○/◐ turn-marker instruction in the global CLAUDE.md ----
+//
+// The block is versioned via the sentinel comment ("… turn markers v2"): bump MARKER_VERSION
+// whenever MARKER_SNIPPET's content changes, and marker_status() reports existing installs as
+// Outdated so both the GUI (startup dialog + tray item) and `claude-sessions markers` offer an
+// in-place upgrade. A sentinel-less hand-pasted copy is matched by its heading instead and
+// judged current by whether it already teaches every glyph.
 
 const MARKER_SENTINEL: &str = "claude-sessions: turn markers";
+const MARKER_VERSION: u32 = 2;
+/// Every version of the block ends with this exact line — it bounds the in-place replacement.
+const MARKER_END: &str = "Use exactly one, every turn, as the very last line.";
 const MARKER_SNIPPET: &str = r#"
 
-<!-- claude-sessions: turn markers -->
+<!-- claude-sessions: turn markers v2 -->
 ## Session-status marker (end every response with one)
 
 A session-status dashboard reads the transcript to tell, at a glance, which sessions are waiting on me. To make that reliable, **end every response with a status marker on its own final line — nothing after it:**
 
 - `○` — the ball is in my court: you asked a question, greeted me, offered options/choices, or need a decision, approval, or any reply from me before the conversation moves on. **When in doubt, use this.**
+- `◐` — the ball is in nobody's court yet: you ended your turn only because you're waiting on background work you started (a build or test run, a background task, a subagent, a monitor/watcher, a scheduled wake-up) that will report back to you; nothing is needed from me.
 - `●` — you completed the work I asked for and nothing is pending from me; the session is safe to close.
 
 Rules of thumb:
 - A greeting or "what would you like to work on?" is `○`, **never** `●` — you're waiting on me.
 - An open question or an offer ("want me to…?") is `○`.
-- `●` is only for a turn that actually *finished a task* with nothing left for me to answer or decide.
+- Ending the turn while a background task, agent, or watcher is still running and will wake you is `◐` — but if you also need an answer from me, `○` wins.
+- `●` is only for a turn that actually *finished a task* with nothing left for me to answer or decide, and nothing still running in the background.
 
 Use exactly one, every turn, as the very last line.
 "#;
@@ -188,6 +199,100 @@ pub fn claude_md_has_markers() -> bool {
     std::fs::read_to_string(claude_md_path())
         .map(|s| s.contains(MARKER_SENTINEL) || (s.contains('○') && s.contains('●')))
         .unwrap_or(false)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkerStatus {
+    Missing,
+    Current,
+    Outdated,
+}
+
+/// Where the global CLAUDE.md stands relative to this build's marker convention.
+pub fn marker_status() -> MarkerStatus {
+    marker_status_of(&std::fs::read_to_string(claude_md_path()).unwrap_or_default())
+}
+
+fn marker_status_of(content: &str) -> MarkerStatus {
+    if let Some(v) = marker_version(content) {
+        return if v >= MARKER_VERSION {
+            MarkerStatus::Current
+        } else {
+            MarkerStatus::Outdated
+        };
+    }
+    if content.contains('○') && content.contains('●') {
+        // Hand-pasted copy without our sentinel: current once it teaches every glyph.
+        return if content.contains('◐') {
+            MarkerStatus::Current
+        } else {
+            MarkerStatus::Outdated
+        };
+    }
+    MarkerStatus::Missing
+}
+
+/// Version carried by the sentinel comment; a sentinel predating versioning counts as 1.
+fn marker_version(content: &str) -> Option<u32> {
+    let pos = content.find(MARKER_SENTINEL)?;
+    let rest = content[pos + MARKER_SENTINEL.len()..].trim_start();
+    Some(
+        rest.strip_prefix('v')
+            .and_then(|r| {
+                let digits: String = r.chars().take_while(|c| c.is_ascii_digit()).collect();
+                digits.parse().ok()
+            })
+            .unwrap_or(1),
+    )
+}
+
+/// Add the marker block if it's missing, or swap an outdated one for the current version.
+/// The single entry point for the CLI `markers` subcommand and both GUI surfaces.
+pub fn sync_claude_md_markers() -> bool {
+    match marker_status() {
+        MarkerStatus::Missing => append_claude_md_markers(),
+        MarkerStatus::Outdated => upgrade_claude_md_markers(),
+        MarkerStatus::Current => {
+            println!("turn-marker instruction is already up to date");
+            true
+        }
+    }
+}
+
+/// Replace an outdated marker block in place (backing the file up first). Handles both a
+/// sentinel-tagged block and a hand-pasted copy matched by its heading; a heavily customized
+/// block missing the closing line is left untouched.
+fn upgrade_claude_md_markers() -> bool {
+    let path = claude_md_path();
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    let Some(updated) = replace_marker_block(&content) else {
+        eprintln!(
+            "markers: couldn't locate the old block in {} — update it manually",
+            path.display()
+        );
+        return false;
+    };
+    backup(&path);
+    let ok = std::fs::write(&path, updated).is_ok();
+    if ok {
+        println!("updated turn-marker instruction in {}", path.display());
+    }
+    ok
+}
+
+fn replace_marker_block(content: &str) -> Option<String> {
+    let start = content
+        .find(&format!("<!-- {MARKER_SENTINEL}"))
+        .or_else(|| content.find("## Session-status marker"))?;
+    let end = start + content[start..].find(MARKER_END)? + MARKER_END.len();
+    Some(format!(
+        "{}{}{}",
+        &content[..start],
+        MARKER_SNIPPET.trim(),
+        &content[end..]
+    ))
 }
 
 /// Append the turn-marker instruction to ~/.claude/CLAUDE.md (idempotent; backs up first if the
@@ -241,6 +346,56 @@ mod tests {
         assert!(!is_recorder_cmd("node /home/me/notify.js"));
         // A script that merely lives under a "claude-sessions" directory is not our recorder.
         assert!(!is_recorder_cmd("python3 /home/claude-sessions/worklog.py"));
+    }
+
+    #[test]
+    fn marker_status_detects_missing_current_and_outdated() {
+        assert_eq!(marker_status_of(""), MarkerStatus::Missing);
+        assert_eq!(marker_status_of("# my rules\nbe nice"), MarkerStatus::Missing);
+        // A sentinel that predates versioning is v1 → outdated.
+        assert_eq!(
+            marker_status_of("<!-- claude-sessions: turn markers -->\n## Session-status marker"),
+            MarkerStatus::Outdated
+        );
+        assert_eq!(marker_status_of(MARKER_SNIPPET), MarkerStatus::Current);
+        // A future version must never be "upgraded" backwards.
+        assert_eq!(
+            marker_status_of("<!-- claude-sessions: turn markers v9 -->"),
+            MarkerStatus::Current
+        );
+        // Hand-pasted copies (no sentinel) are judged by the glyphs they teach.
+        assert_eq!(
+            marker_status_of("## Session-status marker\n- `○` …\n- `●` …"),
+            MarkerStatus::Outdated
+        );
+        assert_eq!(
+            marker_status_of("## Session-status marker\n- `○` …\n- `◐` …\n- `●` …"),
+            MarkerStatus::Current
+        );
+    }
+
+    #[test]
+    fn replace_marker_block_swaps_only_the_block() {
+        let old = format!(
+            "# Global instructions\n\n<!-- {MARKER_SENTINEL} -->\n## Session-status marker \
+             (end every response with one)\nold body\n{MARKER_END}\n\n## Other rules\nkeep me\n"
+        );
+        let new = replace_marker_block(&old).unwrap();
+        assert!(new.starts_with("# Global instructions\n\n<!-- claude-sessions: turn markers v2 -->"));
+        assert!(new.contains('◐'));
+        assert!(!new.contains("old body"));
+        assert!(new.ends_with("\n\n## Other rules\nkeep me\n"));
+
+        // A sentinel-less hand-pasted block is matched by its heading and gains the sentinel.
+        let hand = format!(
+            "## Session-status marker (end every response with one)\nbody\n{MARKER_END}\ntail"
+        );
+        let up = replace_marker_block(&hand).unwrap();
+        assert!(up.starts_with("<!-- claude-sessions: turn markers v2 -->"));
+        assert!(up.ends_with("\ntail"));
+
+        // A heavily customized block without the closing line is left alone.
+        assert_eq!(replace_marker_block("## Session-status marker\ncustom stuff"), None);
     }
 
     #[test]

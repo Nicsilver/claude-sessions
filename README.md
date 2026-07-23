@@ -38,7 +38,9 @@ One binary: GUI, hook recorder and installer in one (~6 MB, Rust + [Tauri](https
 
 To make it permanent, run `claude-sessions install-app` once. It copies the binary to a stable per-user location (`%LOCALAPPDATA%\ClaudeSessions` on Windows, `~/Library/Application Support/ClaudeSessions` on macOS), turns on launch at login, and relaunches from there. `claude-sessions uninstall-app` reverses it. Ticking **Start at login** in the options works too, but then keep the binary where it is: launch-at-login points at its current folder.
 
-Optionally, `claude-sessions markers` (also in the tray menu) adds an instruction block to your global `CLAUDE.md` that makes Claude end each reply with ● or ○ (plus rules of thumb for the edge cases), which sharpens the *done* vs *your turn* distinction.
+Optionally, `claude-sessions markers` (also in the tray menu) adds an instruction block to your global `CLAUDE.md` that makes Claude end each reply with ●, ○, or ◐ (plus rules of thumb for the edge cases), which sharpens the *done* vs *your turn* distinction — ◐ marks a turn that ended only because Claude is waiting on background work (a build, a subagent, a watcher), so the session keeps showing as *working* instead of *your turn*.
+
+The block is versioned: when a newer app changes the marker convention, the widget pops up an offer to swap the old block in your `CLAUDE.md` for the current one (a timestamped backup is saved next to it), and the tray menu shows *Update turn markers* until it's done. Re-running `claude-sessions markers` upgrades in place too — even for a hand-pasted copy without the version comment, as long as the block still ends with its original closing line.
 
 ## Using it
 

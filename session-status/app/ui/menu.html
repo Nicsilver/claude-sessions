@@ -117,6 +117,8 @@ async function open(payload) {
   panel.appendChild(item("New Claude session", { onclick: () => invoke("new_session") }));
   if (payload.markers_missing) {
     panel.appendChild(item("Add turn markers to CLAUDE.md", { onclick: () => invoke("menu_action", { id: "markers" }) }));
+  } else if (payload.markers_outdated) {
+    panel.appendChild(item("Update turn markers in CLAUDE.md", { onclick: () => invoke("menu_action", { id: "markers" }) }));
   }
   panel.appendChild(sep());
   panel.appendChild(item("Quit", { onclick: () => invoke("menu_action", { id: "quit" }) }));

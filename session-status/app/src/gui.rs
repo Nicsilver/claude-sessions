@@ -25,6 +25,7 @@ pub fn run() -> tauri::Result<()> {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -51,6 +52,7 @@ pub fn run() -> tauri::Result<()> {
             }
             setup_tray(app.handle())?;
             register_hotkeys(app.handle());
+            offer_marker_upgrade(app.handle());
             // Auto-hide is a level check exactly once, at startup: launching at login with
             // nothing running should go straight to the tray rather than flash the panel.
             let startup = Pulse::of(&model::load());
@@ -300,6 +302,35 @@ fn jump_to_top(app: &tauri::AppHandle) {
     }
 }
 
+/// Startup offer, once per launch: the marker block in CLAUDE.md was written by an older
+/// version of the convention (e.g. before the ◐ background-wait glyph), so the states it
+/// produces no longer match what this build's recorder reads. Only fires for users who already
+/// opted in — a *missing* block stays opt-in via the tray menu, exactly as before.
+fn offer_marker_upgrade(app: &tauri::AppHandle) {
+    if install::marker_status() != install::MarkerStatus::Outdated {
+        return;
+    }
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+    app.dialog()
+        .message(
+            "This version changed the turn-marker instruction Claude follows:\n\
+             ◐ now marks a turn that ended while waiting on background work (builds, agents, \
+             watchers), so those sessions stay green instead of turning yellow.\n\n\
+             Your ~/.claude/CLAUDE.md still has the old block. Replace it now?\n\
+             (A timestamped backup is saved next to it.)",
+        )
+        .title("claude-sessions — turn markers changed")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Update CLAUDE.md".into(),
+            "Later".into(),
+        ))
+        .show(|update| {
+            if update {
+                let _ = install::sync_claude_md_markers();
+            }
+        });
+}
+
 /// Push the current state to menu.html; it sizes itself, pops up at the cursor and shows.
 fn open_tray_menu(app: &tauri::AppHandle, x: f64, y: f64) {
     let monitor = app.monitor_from_point(x, y).ok().flatten().map(|m| {
@@ -308,6 +339,7 @@ fn open_tray_menu(app: &tauri::AppHandle, x: f64, y: f64) {
             "w": m.size().width, "h": m.size().height,
         })
     });
+    let markers = install::marker_status();
     let _ = app.emit_to(
         "menu",
         "menu-open",
@@ -316,7 +348,8 @@ fn open_tray_menu(app: &tauri::AppHandle, x: f64, y: f64) {
             "y": y,
             "monitor": monitor,
             "sessions": to_json(&model::load()),
-            "markers_missing": !install::claude_md_has_markers(),
+            "markers_missing": markers == install::MarkerStatus::Missing,
+            "markers_outdated": markers == install::MarkerStatus::Outdated,
             "theme": theme(),
         }),
     );
@@ -327,7 +360,7 @@ fn menu_action(app: tauri::AppHandle, id: String) {
     match id.as_str() {
         "toggle" => toggle_window(&app),
         "markers" => {
-            let _ = install::append_claude_md_markers();
+            let _ = install::sync_claude_md_markers();
         }
         "quit" => app.exit(0),
         _ => {}
