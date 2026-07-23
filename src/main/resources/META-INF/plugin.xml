@@ -11,9 +11,6 @@
     <depends>org.jetbrains.plugins.terminal</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow id="Claude Sessions" anchor="right" secondary="false"
-                    icon="AllIcons.Toolwindows.WebToolWindow"
-                    factoryClass="com.nije.claudesessions.SessionsToolWindowFactory"/>
         <postStartupActivity implementation="com.nije.claudesessions.FocusWatcher"/>
     </extensions>
 
