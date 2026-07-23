@@ -8,6 +8,11 @@ use std::io::Read;
 use std::path::Path;
 
 pub fn record(state: &str) {
+    // Sessions spawned by the AI labeler (claude -p) inherit this marker via the hook
+    // environment — recording them would show phantom sessions and recurse the labeler.
+    if std::env::var("CLAUDE_SESSIONS_SUPPRESS").is_ok() {
+        return;
+    }
     let mut raw = String::new();
     let _ = std::io::stdin().read_to_string(&mut raw);
     let data: Value = if raw.trim().is_empty() {
@@ -27,6 +32,8 @@ pub fn record(state: &str) {
 
     if state == "end" {
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(ai_label_path(&sid));
+        let _ = std::fs::remove_file(ai_pending_path(&sid));
         return;
     }
 
@@ -59,12 +66,23 @@ pub fn record(state: &str) {
             cmd_label = command_topic(&cmd, &args);
         }
     }
+    let ai_label = read_ai_label(&sid);
+    if ai_label.is_empty()
+        && cmd_label.is_empty()
+        && has_prompt
+        && ai_labels_enabled()
+        && custom_label(&sid).is_none()
+        && wants_ai_label(&prompt)
+    {
+        spawn_ai_labeler(&sid, &prompt);
+    }
     if custom_label(&sid).is_some()
         || topic.is_empty()
         || matches!(state, "start" | "done")
         || (state == "working" && has_prompt)
+        || ai_label != str_of(&prev, "ai_label")
     {
-        let d = derive_label(&sid, &reg, &cwd, &transcript, &cmd_label);
+        let d = derive_label(&sid, &reg, &cwd, &transcript, &cmd_label, &ai_label);
         if !d.is_empty() {
             topic = d;
         }
@@ -100,6 +118,7 @@ pub fn record(state: &str) {
     rec.insert("state".into(), json!(eff));
     rec.insert("topic".into(), json!(topic));
     rec.insert("cmd_label".into(), json!(cmd_label));
+    rec.insert("ai_label".into(), json!(ai_label));
     rec.insert("cwd".into(), json!(cwd));
     rec.insert("pid".into(), json!(pid));
     rec.insert("ppid".into(), json!(self_ppid));
@@ -201,7 +220,14 @@ pub fn short(txt: &str, n: usize) -> String {
     format!("{head}…")
 }
 
-fn derive_label(sid: &str, reg: &Value, cwd: &str, transcript: &str, cmd_label: &str) -> String {
+fn derive_label(
+    sid: &str,
+    reg: &Value,
+    cwd: &str,
+    transcript: &str,
+    cmd_label: &str,
+    ai_label: &str,
+) -> String {
     if let Some(c) = custom_label(sid) {
         return c;
     }
@@ -213,6 +239,9 @@ fn derive_label(sid: &str, reg: &Value, cwd: &str, transcript: &str, cmd_label: 
     }
     if !cmd_label.is_empty() {
         return cmd_label.to_string();
+    }
+    if !ai_label.is_empty() {
+        return ai_label.to_string();
     }
     let (title, latest) = transcript_titles(transcript);
     let br = git_branch(cwd);
@@ -237,6 +266,138 @@ fn derive_label(sid: &str, reg: &Value, cwd: &str, transcript: &str, cmd_label: 
     } else {
         base
     }
+}
+
+// ---- AI labels (opt-in: "ai_labels": true in config.json) ----
+//
+// Freeform sessions get no deterministic label, so the recorder spawns a detached one-shot
+// `claude -p --model haiku` call to name the session (once per session, never blocking the
+// hook). The child writes ai-labels/<sid>.json; the next hook event picks it up as the topic.
+
+fn ai_labels_enabled() -> bool {
+    load_json(&config_path())
+        .get("ai_labels")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn ai_label_path(sid: &str) -> std::path::PathBuf {
+    ai_labels_dir().join(format!("{sid}.json"))
+}
+
+fn ai_pending_path(sid: &str) -> std::path::PathBuf {
+    ai_labels_dir().join(format!("{sid}.pending"))
+}
+
+fn read_ai_label(sid: &str) -> String {
+    str_of(&load_json(&ai_label_path(sid)), "label")
+}
+
+/// Only real freeform requests are worth a model call — slash commands have deterministic
+/// labels and trivial/meta prompts would just name the session "ok".
+fn wants_ai_label(prompt: &str) -> bool {
+    let p = prompt.trim_start();
+    !p.starts_with('/') && is_substantial(p)
+}
+
+/// Fire-and-forget: claim the pending file (the concurrency guard), then respawn ourselves as
+/// `ai-label <sid>` fully detached so the hook returns immediately.
+fn spawn_ai_labeler(sid: &str, prompt: &str) {
+    if std::fs::create_dir_all(ai_labels_dir()).is_err() {
+        return;
+    }
+    let pending = ai_pending_path(sid);
+    let claimed = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&pending)
+        .is_ok();
+    if !claimed {
+        // A stale claim (crashed labeler) may hold the slot forever — take it over after 3min.
+        let fresh = std::fs::metadata(&pending)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .map(|age| age.as_secs() < 180)
+            .unwrap_or(true);
+        if fresh {
+            return;
+        }
+    }
+    let excerpt: String = prompt.chars().take(2000).collect();
+    if std::fs::write(&pending, excerpt).is_err() {
+        let _ = std::fs::remove_file(&pending);
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        let _ = std::fs::remove_file(&pending);
+        return;
+    };
+    let _ = std::process::Command::new(exe)
+        .args(["ai-label", sid])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// The detached child: ask a small model for a label and store it. Runs outside any hook, so
+/// latency is free; the marker env stops the nested claude's own hooks from recording it.
+pub fn run_ai_label(sid: &str) {
+    if sid.is_empty() {
+        return;
+    }
+    let pending = ai_pending_path(sid);
+    let Ok(excerpt) = std::fs::read_to_string(&pending) else {
+        return;
+    };
+    let cfg = load_json(&config_path());
+    let model = {
+        let m = str_of(&cfg, "ai_label_model");
+        if m.is_empty() {
+            "haiku".to_string()
+        } else {
+            m
+        }
+    };
+    let instruction = format!(
+        "Compose a short label (maximum 20 characters) naming this coding session, based on \
+         the request below. Keep identifiers exactly as written (ticket ids like PROJ-123, \
+         PR #456) and put them first, followed by one or two action words. Reply with ONLY \
+         the label — no quotes, no punctuation around it, nothing else.\n\nRequest:\n{excerpt}"
+    );
+    let mut cmd = std::process::Command::new("claude");
+    cmd.args(["-p", &instruction, "--model", &model])
+        .env("CLAUDE_SESSIONS_SUPPRESS", "1")
+        .stdin(std::process::Stdio::null());
+    let api_key = str_of(&cfg, "ai_label_api_key");
+    if !api_key.is_empty() {
+        cmd.env("ANTHROPIC_API_KEY", api_key);
+    }
+    if let Ok(out) = cmd.output() {
+        let label = clean_ai_label(&String::from_utf8_lossy(&out.stdout));
+        if !label.is_empty() {
+            write_atomic(
+                &ai_label_path(sid),
+                &json!({"label": label, "ts": unix_now()}),
+            );
+        }
+    }
+    let _ = std::fs::remove_file(&pending);
+}
+
+/// Model output → tab-safe label: first meaningful line, stripped of wrapping quotes/backticks
+/// and of turn-marker lines (a global CLAUDE.md may make even `claude -p` emit ●/○), then
+/// word-boundary-capped to the tab budget.
+fn clean_ai_label(raw: &str) -> String {
+    let line = raw
+        .lines()
+        .map(|l| l.trim().trim_matches(['"', '\'', '`', '*']).trim())
+        .map(|l| l.trim_matches(['●', '○']).trim())
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    let flat = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    short(&flat, TAB_LABEL_MAX)
 }
 
 // ---- slash-command labels ----
@@ -804,6 +965,25 @@ mod tests {
             command_topic("prepare-release-notes", "PROJ-1234567890"),
             "PROJ-1234567890 PRN"
         );
+    }
+
+    #[test]
+    fn clean_ai_label_strips_wrapping_and_marker_noise() {
+        assert_eq!(clean_ai_label("PR #923 address\n\n○\n"), "PR #923 address");
+        assert_eq!(clean_ai_label("\"PROJ-123 hotfix\""), "PROJ-123 hotfix");
+        assert_eq!(clean_ai_label("`fix login flow`  \n"), "fix login flow");
+        assert_eq!(clean_ai_label("●"), "");
+        assert_eq!(clean_ai_label(""), "");
+        // over-long output still lands under the tab cap
+        assert!(clean_ai_label("a very long label the model ignored the cap on").chars().count() <= 20);
+    }
+
+    #[test]
+    fn wants_ai_label_skips_commands_and_trivia() {
+        assert!(wants_ai_label("hey address the review comments on pr #923"));
+        assert!(!wants_ai_label("/implement PROJ-18546")); // deterministic label path
+        assert!(!wants_ai_label("ok")); // trivial
+        assert!(!wants_ai_label("<command-name>/foo</command-name>")); // meta noise
     }
 
     #[test]

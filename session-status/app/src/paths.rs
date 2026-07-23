@@ -23,6 +23,9 @@ pub fn labels_path() -> PathBuf {
 pub fn mutes_path() -> PathBuf {
     base().join("mutes.json")
 }
+pub fn ai_labels_dir() -> PathBuf {
+    base().join("ai-labels")
+}
 pub fn request_path() -> PathBuf {
     base().join("focus-request.json")
 }

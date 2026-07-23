@@ -23,6 +23,11 @@ fn main() {
             recorder::record(state);
             std::process::exit(0);
         }
+        // Spawned detached by the recorder — asks a small model to name a session, then exits.
+        Some("ai-label") => {
+            recorder::run_ai_label(args.get(1).map(String::as_str).unwrap_or(""));
+            std::process::exit(0);
+        }
         // CLI subcommands attach the launching console first so their output is visible in
         // release builds (windows subsystem detaches stdio).
         Some("install") => {
