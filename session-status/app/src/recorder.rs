@@ -576,26 +576,52 @@ fn transcript_excerpt(sid: &str) -> String {
             }
         }
     }
-    let recent = &msgs[msgs.len().saturating_sub(3)..];
-    recent.join("\n---\n").chars().take(2000).collect()
+    // First message + last two, not just the tail: recency alone names the session after
+    // its latest tangent (often the very message that triggered the rename), while the
+    // opener anchors what the session is actually about.
+    let picked: Vec<&String> = if msgs.len() <= 3 {
+        msgs.iter().collect()
+    } else {
+        let mut v = vec![&msgs[0]];
+        v.extend(&msgs[msgs.len() - 2..]);
+        v
+    };
+    picked
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join("\n---\n")
+        .chars()
+        .take(2000)
+        .collect()
 }
 
-/// Forced rename: custom (top) priority, pushed through every surface now — an idle session
-/// may not fire another hook event for hours, so waiting for one would leave stale names.
+/// Forced rename: stored as a regular AI label (NOT a custom pin — auto/pivot labeling may
+/// still evolve it later), but pushed through every surface now — an idle session may not
+/// fire another hook event for hours, so waiting for one would leave stale names.
 fn apply_forced_label(sid: &str, label: &str) {
-    let mut m = load_json(&labels_path());
-    if !m.is_object() {
-        m = Value::Object(Map::new());
+    write_atomic(
+        &ai_label_path(sid),
+        &json!({"label": label, "ts": unix_now()}),
+    );
+    // Drop any custom pin (an earlier alt-click rename, or a pre-0.15 forced rename) —
+    // it outranks AI labels, and the user's latest explicit action should win.
+    let mut pins = load_json(&labels_path());
+    if let Some(o) = pins.as_object_mut() {
+        if o.remove(sid).is_some() {
+            write_atomic(&labels_path(), &pins);
+        }
     }
-    if let Some(o) = m.as_object_mut() {
-        o.insert(sid.to_string(), json!(label));
-    }
-    write_atomic(&labels_path(), &m);
     let sp = state_dir().join(format!("{sid}.json"));
     let mut st = load_json(&sp);
     let transcript = str_of(&st, "transcript");
     if st.is_object() {
         st["topic"] = json!(label);
+        st["ai_label"] = json!(label);
+        // A slash-command label outranks AI labels in derive_label — without clearing it,
+        // the next hook event would revert the name the user just asked for.
+        st["cmd_label"] = json!("");
+        st["prompts_since_label"] = json!(0);
         write_atomic(&sp, &st);
     }
     let (reg, reg_path) = registry_for(sid);

@@ -47,6 +47,7 @@ Optionally, `claude-sessions markers` (also in the tray menu) adds an instructio
 | Click a session | Jump to its terminal / IDE tab |
 | Middle-click | Mute it for an hour (sinks to the bottom) |
 | <kbd>Alt</kbd>-click | Rename it inline |
+| <kbd>Shift</kbd>-click | Have the AI name it from the transcript (auto-labeling can still evolve it later) |
 | `+` / `×` | New Claude session / hide to tray |
 | ⚙ | Options |
 | Tray left-click | Jump to the top session |
