@@ -120,7 +120,21 @@ fn stop_other_instances() {
     }
     #[cfg(unix)]
     {
-        // pkill matches by name and would include ourselves; --older isn't reliable, so leave a
-        // second instance to no-op its hotkey registration rather than risk killing this process.
+        // pkill by name would match ourselves too, so list pids with pgrep and skip our own.
+        let me = std::process::id();
+        if let Ok(out) = std::process::Command::new("pgrep")
+            .args(["-x", "claude-sessions"])
+            .output()
+        {
+            for pid in String::from_utf8_lossy(&out.stdout).split_whitespace() {
+                if let Ok(pid) = pid.parse::<i32>() {
+                    if pid as u32 != me {
+                        unsafe { libc::kill(pid, libc::SIGTERM) };
+                    }
+                }
+            }
+            // Let the dying instance release its file lock and global hotkey first.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
     }
 }
