@@ -132,6 +132,8 @@ pub fn record(state: &str) {
                     snippet
                 };
             }
+        } else if verdict == "working" {
+            eff = "working".to_string();
         }
     }
 
@@ -629,13 +631,13 @@ fn apply_forced_label(sid: &str, label: &str) {
 }
 
 /// Model output → tab-safe label: first meaningful line, stripped of wrapping quotes/backticks
-/// and of turn-marker lines (a global CLAUDE.md may make even `claude -p` emit ●/○), then
+/// and of turn-marker lines (a global CLAUDE.md may make even `claude -p` emit ●/○/◐), then
 /// word-boundary-capped to the tab budget.
 fn clean_ai_label(raw: &str) -> String {
     let line = raw
         .lines()
         .map(|l| l.trim().trim_matches(['"', '\'', '`', '*']).trim())
-        .map(|l| l.trim_matches(['●', '○']).trim())
+        .map(|l| l.trim_matches(['●', '○', '◐']).trim())
         .find(|l| !l.is_empty())
         .unwrap_or("");
     let flat = line.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -930,10 +932,11 @@ fn classify_turn(transcript: &str) -> (String, String) {
     classify_turn_text(&text)
 }
 
-/// Decide Done vs Your-turn from the assistant's final message text, plus a short snippet to
-/// show for your-turn. Looks at the last non-empty line: `○` (hollow) → your turn (snippet = the
-/// line above it), `●` (filled) → done, otherwise a trailing `?` is a weak your-turn fallback,
-/// else done.
+/// Decide Done vs Your-turn vs still-Working from the assistant's final message text, plus a
+/// short snippet to show for your-turn. Looks at the last non-empty line: `○` (hollow) → your
+/// turn (snippet = the line above it), `◐` (half) → working (the turn ended but background work
+/// will wake the session), `●` (filled) → done, otherwise a trailing `?` is a weak your-turn
+/// fallback, else done. `○` outranks `◐`: a question must never be hidden by a pending task.
 fn classify_turn_text(text: &str) -> (String, String) {
     let lines: Vec<&str> = text
         .lines()
@@ -951,6 +954,9 @@ fn classify_turn_text(text: &str) -> (String, String) {
             String::new()
         };
         return ("yourturn".into(), snippet);
+    }
+    if last.contains('◐') {
+        return ("working".into(), String::new());
     }
     if last.contains('●') {
         return ("done".into(), String::new());
@@ -1129,6 +1135,32 @@ mod tests {
     }
 
     #[test]
+    fn marker_working_when_last_line_has_half_circle() {
+        // Turn ended but a background task/agent/monitor will wake the session — still working.
+        assert_eq!(
+            classify_turn_text("build kicked off, I'll report back\n\n◐"),
+            ("working".into(), String::new())
+        );
+    }
+
+    #[test]
+    fn hollow_circle_outranks_half_circle() {
+        // A turn that both asks and waits must keep the question visible.
+        assert_eq!(
+            classify_turn_text("pick a variant while the build runs\n○ ◐").0,
+            "yourturn"
+        );
+    }
+
+    #[test]
+    fn half_circle_beats_a_dangling_earlier_question() {
+        assert_eq!(
+            classify_turn_text("Do you want X?\nWaiting on the deploy watcher.\n◐").0,
+            "working"
+        );
+    }
+
+    #[test]
     fn trailing_question_is_a_weak_yourturn() {
         let (verdict, snippet) = classify_turn_text("some reasoning\nShould I proceed?");
         assert_eq!(verdict, "yourturn");
@@ -1224,6 +1256,7 @@ mod tests {
         assert_eq!(clean_ai_label("\"PROJ-123 hotfix\""), "PROJ-123 hotfix");
         assert_eq!(clean_ai_label("`fix login flow`  \n"), "fix login flow");
         assert_eq!(clean_ai_label("●"), "");
+        assert_eq!(clean_ai_label("◐"), "");
         assert_eq!(clean_ai_label(""), "");
         // over-long output still lands under the tab cap
         assert!(
