@@ -936,7 +936,10 @@ mod tests {
 
     #[test]
     fn command_topic_keeps_the_natural_form_when_it_fits() {
-        assert_eq!(command_topic("implement", "PROJ-18546"), "implement PROJ-18546"); // exactly 20
+        assert_eq!(
+            command_topic("implement", "PROJ-18546"),
+            "implement PROJ-18546"
+        ); // exactly 20
         assert_eq!(command_topic("standup-notes", ""), "standup-notes");
         assert_eq!(command_topic("review-prs", "5"), "review-prs 5");
     }
@@ -949,7 +952,10 @@ mod tests {
             "implement PROJ-18546"
         );
         assert_eq!(
-            command_topic("review-pr", "https://github.com/octocat/hello-world/pull/1234"),
+            command_topic(
+                "review-pr",
+                "https://github.com/octocat/hello-world/pull/1234"
+            ),
             "review-pr PR #1234"
         );
     }
@@ -975,7 +981,12 @@ mod tests {
         assert_eq!(clean_ai_label("●"), "");
         assert_eq!(clean_ai_label(""), "");
         // over-long output still lands under the tab cap
-        assert!(clean_ai_label("a very long label the model ignored the cap on").chars().count() <= 20);
+        assert!(
+            clean_ai_label("a very long label the model ignored the cap on")
+                .chars()
+                .count()
+                <= 20
+        );
     }
 
     #[test]
