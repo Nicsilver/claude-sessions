@@ -49,13 +49,22 @@ pub fn record(state: &str) {
     let transcript = str_of(&data, "transcript_path");
 
     let mut topic = str_of(&prev, "topic");
-    let has_prompt = !str_of(&data, "prompt").is_empty();
+    let prompt = str_of(&data, "prompt");
+    let has_prompt = !prompt.is_empty();
+    let mut cmd_label = str_of(&prev, "cmd_label");
+    if let Some((cmd, args)) = parse_command(&prompt) {
+        // A later bare command (no args) must not steal the label from an earlier
+        // argument-carrying one (e.g. /run-tests after /implement PROJ-x).
+        if !args.is_empty() || cmd_label.is_empty() {
+            cmd_label = command_topic(&cmd, &args);
+        }
+    }
     if custom_label(&sid).is_some()
         || topic.is_empty()
         || matches!(state, "start" | "done")
         || (state == "working" && has_prompt)
     {
-        let d = derive_label(&sid, &reg, &cwd, &transcript);
+        let d = derive_label(&sid, &reg, &cwd, &transcript, &cmd_label);
         if !d.is_empty() {
             topic = d;
         }
@@ -90,6 +99,7 @@ pub fn record(state: &str) {
     rec.insert("session_id".into(), json!(sid));
     rec.insert("state".into(), json!(eff));
     rec.insert("topic".into(), json!(topic));
+    rec.insert("cmd_label".into(), json!(cmd_label));
     rec.insert("cwd".into(), json!(cwd));
     rec.insert("pid".into(), json!(pid));
     rec.insert("ppid".into(), json!(self_ppid));
@@ -191,7 +201,7 @@ pub fn short(txt: &str, n: usize) -> String {
     format!("{head}…")
 }
 
-fn derive_label(sid: &str, reg: &Value, cwd: &str, transcript: &str) -> String {
+fn derive_label(sid: &str, reg: &Value, cwd: &str, transcript: &str, cmd_label: &str) -> String {
     if let Some(c) = custom_label(sid) {
         return c;
     }
@@ -200,6 +210,9 @@ fn derive_label(sid: &str, reg: &Value, cwd: &str, transcript: &str) -> String {
     let reg_name = str_of(reg, "name");
     if !reg_name.trim().is_empty() && str_of(reg, "nameSource") != "derived" {
         return reg_name.trim().to_string();
+    }
+    if !cmd_label.is_empty() {
+        return cmd_label.to_string();
     }
     let (title, latest) = transcript_titles(transcript);
     let br = git_branch(cwd);
@@ -224,6 +237,200 @@ fn derive_label(sid: &str, reg: &Value, cwd: &str, transcript: &str) -> String {
     } else {
         base
     }
+}
+
+// ---- slash-command labels ----
+
+/// The tab-name budget TabNamer applies (word-boundary cut at 20). Command topics are
+/// composed to fit it so the IDE tab shows them whole.
+const TAB_LABEL_MAX: usize = 20;
+
+/// Built-in CLI commands that would make meaningless labels.
+const BUILTIN_COMMANDS: &[&str] = &[
+    "clear", "compact", "config", "cost", "doctor", "exit", "fast", "help", "init", "login",
+    "logout", "mcp", "memory", "model", "quit", "rename", "resume", "status",
+];
+
+/// Parse a slash-command prompt into (command, args). Handles both the raw form
+/// ("/implement PROJ-18546") and the transcript XML form the hook may deliver
+/// ("<command-name>/implement</command-name>…<command-args>PROJ-18546</command-args>").
+fn parse_command(prompt: &str) -> Option<(String, String)> {
+    let p = prompt.trim();
+    if let Some(name) = between(p, "<command-name>", "</command-name>") {
+        let args = between(p, "<command-args>", "</command-args>").unwrap_or_default();
+        return normalize_command(&name, &args);
+    }
+    let rest = p.strip_prefix('/')?;
+    let mut it = rest.splitn(2, char::is_whitespace);
+    let name = it.next().unwrap_or("").to_string();
+    let args = it.next().unwrap_or("").to_string();
+    normalize_command(&name, &args)
+}
+
+fn between(s: &str, open: &str, close: &str) -> Option<String> {
+    let start = s.find(open)? + open.len();
+    let end = start + s[start..].find(close)?;
+    Some(s[start..end].trim().to_string())
+}
+
+fn normalize_command(name: &str, args: &str) -> Option<(String, String)> {
+    let name = name.trim().trim_start_matches('/');
+    // Plugin-scoped names ("acme-tools:release-prep") label by the skill part.
+    let name = name.rsplit(':').next().unwrap_or(name).trim();
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        || BUILTIN_COMMANDS.contains(&name.to_lowercase().as_str())
+    {
+        return None;
+    }
+    Some((
+        name.to_string(),
+        args.split_whitespace().collect::<Vec<_>>().join(" "),
+    ))
+}
+
+/// Compose "cmd args" into a label that fits [TAB_LABEL_MAX]. Args are compressed first
+/// (PR URLs → "PR #n", flags dropped). If the natural form still overflows, identifiers
+/// come first and the command name is trimmed to whatever fits ("run-team-test
+/// PROJ-18033" → "PROJ-18033 team-test") — never a blind cut through an identifier.
+fn command_topic(cmd: &str, args: &str) -> String {
+    let toks = compress_args(args);
+    let natural = if toks.is_empty() {
+        cmd.to_string()
+    } else {
+        format!("{cmd} {}", toks.join(" "))
+    };
+    if natural.chars().count() <= TAB_LABEL_MAX {
+        return natural;
+    }
+    let ids: Vec<&String> = toks.iter().filter(|t| is_identifier(t)).collect();
+    if ids.is_empty() {
+        return short(&natural, TAB_LABEL_MAX);
+    }
+    let mut base = String::new();
+    for id in ids {
+        let grown = if base.is_empty() {
+            id.clone()
+        } else {
+            format!("{base} {id}")
+        };
+        if grown.chars().count() > TAB_LABEL_MAX {
+            break;
+        }
+        base = grown;
+    }
+    if base.is_empty() {
+        return short(&natural, TAB_LABEL_MAX);
+    }
+    let budget = TAB_LABEL_MAX.saturating_sub(base.chars().count() + 1);
+    let action = fit_command(cmd, budget);
+    if action.is_empty() {
+        base
+    } else {
+        format!("{base} {action}")
+    }
+}
+
+/// Longest tail of the hyphen-split command words that fits [budget]
+/// ("prepare-release-notes", 13 → "release-notes"), falling back to initials ("PRN"), else "".
+fn fit_command(cmd: &str, budget: usize) -> String {
+    let words: Vec<&str> = cmd.split(['-', '_']).filter(|w| !w.is_empty()).collect();
+    for i in 0..words.len() {
+        let cand = words[i..].join("-");
+        if cand.chars().count() <= budget {
+            return cand;
+        }
+    }
+    let initials: String = words
+        .iter()
+        .filter_map(|w| w.chars().next())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    if !initials.is_empty() && initials.chars().count() <= budget {
+        return initials;
+    }
+    String::new()
+}
+
+/// Tokenize args for a label: GitHub PR/issue URLs and "pr #n" pairs become "PR #n",
+/// ticket ids are uppercased, --flags and other URLs are dropped.
+fn compress_args(args: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut toks = args.split_whitespace().peekable();
+    while let Some(t) = toks.next() {
+        if t.starts_with('-') && t.len() > 1 && !t[1..].chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        if let Some(n) = url_number(t) {
+            out.push(format!("PR #{n}"));
+            continue;
+        }
+        if t.contains("://") {
+            continue;
+        }
+        let low = t.to_lowercase();
+        if low == "pr" || low == "pull" {
+            if let Some(next) = toks.peek() {
+                if let Some(n) = hash_number(next) {
+                    toks.next();
+                    out.push(format!("PR #{n}"));
+                    continue;
+                }
+            }
+        }
+        if hash_number(t).is_some() || is_ticket(t) {
+            out.push(t.to_uppercase());
+            continue;
+        }
+        out.push(t.to_string());
+    }
+    out
+}
+
+fn is_identifier(t: &str) -> bool {
+    t.starts_with("PR #") || hash_number(t).is_some() || is_ticket(t)
+}
+
+/// "PROJ-18546"-shaped ticket id: 2+ letters, a dash, digits.
+fn is_ticket(t: &str) -> bool {
+    let Some((alpha, num)) = t.split_once('-') else {
+        return false;
+    };
+    alpha.chars().count() >= 2
+        && alpha.chars().all(|c| c.is_ascii_alphabetic())
+        && !num.is_empty()
+        && num.chars().all(|c| c.is_ascii_digit())
+}
+
+/// "#123" → Some("123").
+fn hash_number(t: &str) -> Option<&str> {
+    let n = t.strip_prefix('#')?;
+    if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) {
+        Some(n)
+    } else {
+        None
+    }
+}
+
+/// Trailing number of a ".../pull/123" or ".../issues/123" URL.
+fn url_number(t: &str) -> Option<String> {
+    if !t.contains("://") {
+        return None;
+    }
+    for marker in ["/pull/", "/issues/"] {
+        if let Some(pos) = t.find(marker) {
+            let digits: String = t[pos + marker.len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if !digits.is_empty() {
+                return Some(digits);
+            }
+        }
+    }
+    None
 }
 
 fn registry_for(sid: &str) -> Value {
@@ -545,6 +752,68 @@ mod tests {
         assert!(!is_substantial("yes")); // in TRIVIAL_PROMPTS
         assert!(!is_substantial("<command-name>")); // tool/meta noise
         assert!(!is_substantial(""));
+    }
+
+    #[test]
+    fn parse_command_reads_raw_and_xml_forms() {
+        assert_eq!(
+            parse_command("/implement PROJ-18546"),
+            Some(("implement".into(), "PROJ-18546".into()))
+        );
+        assert_eq!(
+            parse_command(
+                "<command-name>/acme-tools:release-prep</command-name>\
+                 <command-message>release-prep</command-message>\
+                 <command-args>PROJ-18546</command-args>"
+            ),
+            Some(("release-prep".into(), "PROJ-18546".into()))
+        );
+        assert_eq!(parse_command("address comments for pr #1234"), None); // not a command
+        assert_eq!(parse_command("/model"), None); // built-in
+        assert_eq!(parse_command("/ divided we fall"), None); // not a command name
+    }
+
+    #[test]
+    fn command_topic_keeps_the_natural_form_when_it_fits() {
+        assert_eq!(command_topic("implement", "PROJ-18546"), "implement PROJ-18546"); // exactly 20
+        assert_eq!(command_topic("standup-notes", ""), "standup-notes");
+        assert_eq!(command_topic("review-prs", "5"), "review-prs 5");
+    }
+
+    #[test]
+    fn command_topic_drops_flags_and_compresses_urls() {
+        // dropping --direct brings it back under the cap
+        assert_eq!(
+            command_topic("implement", "PROJ-18546 --direct"),
+            "implement PROJ-18546"
+        );
+        assert_eq!(
+            command_topic("review-pr", "https://github.com/octocat/hello-world/pull/1234"),
+            "review-pr PR #1234"
+        );
+    }
+
+    #[test]
+    fn command_topic_puts_identifiers_first_when_over_budget() {
+        assert_eq!(
+            command_topic("run-team-test", "PROJ-18033"),
+            "PROJ-18033 team-test"
+        );
+        // no command tail fits the leftover budget → initials
+        assert_eq!(
+            command_topic("prepare-release-notes", "PROJ-1234567890"),
+            "PROJ-1234567890 PRN"
+        );
+    }
+
+    #[test]
+    fn compress_args_normalizes_pr_references() {
+        assert_eq!(compress_args("pr #1234"), vec!["PR #1234"]);
+        assert_eq!(compress_args("proj-18546"), vec!["PROJ-18546"]);
+        assert_eq!(
+            compress_args("https://example.com/some/page"),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
