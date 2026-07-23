@@ -27,6 +27,6 @@ process), `tab_title` + `topic` (for title-based tab matching — see `wt.rs` fo
 fuzzy matcher), `tty` (mac only).
 
 `wt.rs` (UI Automation + synthetic keystrokes), `wezterm.rs` (drives the terminal's own
-control CLI) and `jetbrains.rs` (hands the work to the IntelliJ plugin via
-`focus-request.json`) are the reference implementations — prefer the `wezterm.rs` shape
-whenever the terminal exposes a real CLI/API.
+control CLI; Windows + macOS from one file with small `#[cfg]` islands) and `jetbrains.rs`
+(hands the work to the IntelliJ plugin via `focus-request.json`) are the reference
+implementations — prefer the `wezterm.rs` shape whenever the terminal exposes a real CLI/API.

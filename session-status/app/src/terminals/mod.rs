@@ -11,7 +11,7 @@ mod macos_terminal;
 // Pure WT tab-matching policy; used by wt.rs (Windows) but kept platform-independent so its
 // unit tests run on every CI target.
 mod tabmatch;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod wezterm;
 #[cfg(windows)]
 mod wt;
@@ -38,7 +38,11 @@ fn registry() -> &'static [&'static dyn Terminal] {
     // jetbrains first: it is the default "open new sessions in" target on mac.
     #[cfg(target_os = "macos")]
     {
-        &[&jetbrains::JetBrains, &macos_terminal::MacTerminal]
+        &[
+            &jetbrains::JetBrains,
+            &wezterm::WezTerm,
+            &macos_terminal::MacTerminal,
+        ]
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {

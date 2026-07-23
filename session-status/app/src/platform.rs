@@ -298,8 +298,9 @@ mod imp {
     }
 
     /// pid → (parent pid, comm) for every process, from one `ps` call. comm can be a full
-    /// path containing spaces ("…/IntelliJ IDEA.app/…/idea"), so split only twice.
-    fn process_map() -> HashMap<i64, (i64, String)> {
+    /// path containing spaces ("…/IntelliJ IDEA.app/…/idea"), so split only twice. Shared
+    /// with the wezterm terminal adapter.
+    pub fn process_map() -> HashMap<i64, (i64, String)> {
         let mut map = HashMap::new();
         let Ok(o) = std::process::Command::new("ps")
             .args(["-axo", "pid=,ppid=,comm="])
@@ -349,6 +350,11 @@ mod imp {
         for (p, n) in &chain {
             if JETBRAINS_APPS.iter().any(|a| n.contains(a)) {
                 return ("jetbrains".into(), *p);
+            }
+        }
+        for (p, n) in &chain {
+            if n == "wezterm-gui" {
+                return ("wezterm".into(), *p);
             }
         }
         for (p, n) in &chain {
@@ -465,5 +471,7 @@ mod imp {
 }
 
 pub use imp::{annotate, attach_parent_console, is_alive, parent_pid};
+#[cfg(any(windows, target_os = "macos"))]
+pub use imp::process_map;
 #[cfg(windows)]
-pub use imp::{focus_window, main_window_for_pid, process_map};
+pub use imp::{focus_window, main_window_for_pid};
