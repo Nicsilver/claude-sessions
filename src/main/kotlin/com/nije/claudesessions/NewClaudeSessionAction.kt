@@ -4,8 +4,8 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 
-/** "New Claude Session" — opens a terminal tab and runs `clauded`. Has a default
- *  shortcut (⌃⌥⇧C); rebind it in Settings → Keymap → "New Claude Session". */
+/** "New Claude Session" — opens a terminal tab and runs the configured launch command.
+ *  Ships with no default shortcut; bind one in Settings | Keymap | "New Claude Session". */
 class NewClaudeSessionAction : AnAction() {
     override fun actionPerformed(e: AnActionEvent) {
         e.project?.let { ClaudeLauncher.spawn(it) }

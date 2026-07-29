@@ -84,7 +84,7 @@ Both only act the moment something changes, so hiding the panel by hand keeps it
 ## What's in the repo
 
 - **`session-status/app`**: the cross-platform Rust app (widget, tray, hook recorder, installer). All visuals are plain HTML/CSS in `ui/`.
-- **`src/`** (repo root, Gradle): the **IntelliJ plugin**, a tool window with the same session list plus focus/close handling for sessions running in JetBrains terminals.
+- **`src/`** (repo root, Gradle): the **IntelliJ plugin**. Names terminal tabs after the session running in them, handles the widget's focus/close clicks for sessions living in JetBrains terminals, and adds a "New Claude Session" action to the Tools menu.
 
 ## How it works
 

@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.nije"
-version = "0.5.0"
+version = "0.6.0"
 
 repositories {
     mavenCentral()
@@ -42,7 +42,10 @@ intellijPlatform {
     pluginConfiguration {
         ideaVersion {
             sinceBuild = "261"
-            untilBuild = "261.*"
+            // Open-ended: left unset, the Gradle plugin pins untilBuild to the SDK's own branch,
+            // which marks the plugin incompatible the day the next IDE ships. The terminal APIs
+            // used here are the churn risk to watch instead (see ClaudeLauncher).
+            untilBuild = provider { null }
         }
     }
 }
@@ -52,8 +55,9 @@ kotlin {
 }
 
 tasks {
-    // Optional task that boots a headless IDE to pre-index Settings search; we
-    // contribute no settings, and it trips on a JBR bootstrap quirk — skip it.
+    // Optional task that boots a headless IDE to pre-index Settings search. It trips on a JBR
+    // bootstrap quirk here; the cost is that the one settings field isn't findable by typing
+    // in the Settings search box, which isn't worth fighting the bootstrap over.
     buildSearchableOptions {
         enabled = false
     }
