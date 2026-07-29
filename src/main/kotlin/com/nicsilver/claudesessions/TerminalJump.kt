@@ -1,4 +1,4 @@
-package com.nije.claudesessions
+package com.nicsilver.claudesessions
 
 import com.intellij.ide.impl.ProjectUtil
 import com.intellij.openapi.project.Project

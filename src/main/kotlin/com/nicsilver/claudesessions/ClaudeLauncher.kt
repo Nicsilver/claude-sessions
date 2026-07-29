@@ -1,4 +1,4 @@
-package com.nije.claudesessions
+package com.nicsilver.claudesessions
 
 import com.intellij.openapi.project.Project
 import org.jetbrains.plugins.terminal.TerminalToolWindowManager

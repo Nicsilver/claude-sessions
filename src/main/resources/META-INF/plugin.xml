@@ -1,8 +1,8 @@
 <idea-plugin>
-    <id>com.nije.claude-sessions</id>
+    <id>com.nicsilver.claudesessions</id>
     <!-- "Claude Sessions" alone is taken on the Marketplace by an unrelated plugin. -->
     <name>Claude Sessions Companion</name>
-    <vendor url="https://github.com/Nicsilver/claude-sessions">nije</vendor>
+    <vendor url="https://github.com/Nicsilver/claude-sessions">Nicolaj Jensen</vendor>
 
     <description><![CDATA[
         <p>Companion plugin for
@@ -46,17 +46,17 @@
     <depends>org.jetbrains.plugins.terminal</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <postStartupActivity implementation="com.nije.claudesessions.FocusWatcher"/>
+        <postStartupActivity implementation="com.nicsilver.claudesessions.FocusWatcher"/>
         <applicationConfigurable
                 parentId="tools"
-                id="com.nije.claudesessions.settings"
+                id="com.nicsilver.claudesessions.settings"
                 displayName="Claude Sessions"
-                instance="com.nije.claudesessions.ClaudeSessionsConfigurable"/>
+                instance="com.nicsilver.claudesessions.ClaudeSessionsConfigurable"/>
     </extensions>
 
     <actions>
-        <action id="com.nije.claudesessions.NewClaudeSession"
-                class="com.nije.claudesessions.NewClaudeSessionAction"
+        <action id="com.nicsilver.claudesessions.NewClaudeSession"
+                class="com.nicsilver.claudesessions.NewClaudeSessionAction"
                 text="New Claude Session"
                 description="Open a new terminal tab and start a Claude Code session">
             <add-to-group group-id="ToolsMenu" anchor="last"/>

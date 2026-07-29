@@ -1,4 +1,4 @@
-package com.nije.claudesessions
+package com.nicsilver.claudesessions
 
 import com.intellij.openapi.options.BoundConfigurable
 import com.intellij.openapi.ui.DialogPanel

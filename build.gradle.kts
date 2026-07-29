@@ -4,7 +4,7 @@ plugins {
     id("org.jetbrains.intellij.platform") version "2.18.1"
 }
 
-group = "com.nije"
+group = "com.nicsilver"
 version = "0.6.0"
 
 repositories {

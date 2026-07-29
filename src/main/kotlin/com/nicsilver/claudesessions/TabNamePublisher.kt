@@ -1,4 +1,4 @@
-package com.nije.claudesessions
+package com.nicsilver.claudesessions
 
 import com.google.gson.Gson
 import com.intellij.openapi.project.Project

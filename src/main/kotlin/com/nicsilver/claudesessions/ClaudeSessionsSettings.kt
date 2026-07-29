@@ -1,4 +1,4 @@
-package com.nije.claudesessions
+package com.nicsilver.claudesessions
 
 import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.Service
