@@ -1,6 +1,7 @@
 <idea-plugin>
     <id>com.nije.claude-sessions</id>
-    <name>Claude Sessions</name>
+    <!-- "Claude Sessions" alone is taken on the Marketplace by an unrelated plugin. -->
+    <name>Claude Sessions Companion</name>
     <vendor url="https://github.com/Nicsilver/claude-sessions">nije</vendor>
 
     <description><![CDATA[
