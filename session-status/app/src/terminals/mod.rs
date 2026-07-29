@@ -100,7 +100,9 @@ fn fallback_focus(s: &Sess) {
 
 #[allow(unused_variables)]
 fn fallback_close(s: &Sess) {
-    if s.pid <= 0 {
+    // Re-check identity right before the kill: the list is up to 1.5s old, and /T on a pid the OS
+    // recycled in that window would take an unrelated process tree down with it.
+    if s.pid <= 0 || !crate::model::pid_is_session(s.pid, s.updated) {
         return;
     }
     #[cfg(windows)]

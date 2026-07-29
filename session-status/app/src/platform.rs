@@ -10,7 +10,9 @@ mod imp {
     use super::*;
     use crate::recorder::transcript_title;
     use std::collections::{HashMap, HashSet};
-    use windows_sys::Win32::Foundation::{CloseHandle, HWND, INVALID_HANDLE_VALUE, LPARAM, RECT};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, FILETIME, HWND, INVALID_HANDLE_VALUE, LPARAM, RECT,
+    };
     use windows_sys::Win32::System::Console::{
         AttachConsole, FreeConsole, GetConsoleTitleW, ATTACH_PARENT_PROCESS,
     };
@@ -18,7 +20,8 @@ mod imp {
         CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPPROCESS,
     };
     use windows_sys::Win32::System::Threading::{
-        AttachThreadInput, GetCurrentThreadId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        AttachThreadInput, GetCurrentThreadId, GetProcessTimes, OpenProcess,
+        PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetForegroundWindow, GetWindow, GetWindowRect, GetWindowTextLengthW,
@@ -89,6 +92,31 @@ mod imp {
             }
             CloseHandle(h);
             true
+        }
+    }
+
+    /// Wall-clock start of [pid] in unix seconds; 0.0 when it can't be read.
+    pub fn process_start(pid: i64) -> f64 {
+        if pid <= 0 {
+            return 0.0;
+        }
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+            if h.is_null() {
+                return 0.0;
+            }
+            let mut created: FILETIME = std::mem::zeroed();
+            let mut exit: FILETIME = std::mem::zeroed();
+            let mut kernel: FILETIME = std::mem::zeroed();
+            let mut user: FILETIME = std::mem::zeroed();
+            let ok = GetProcessTimes(h, &mut created, &mut exit, &mut kernel, &mut user);
+            CloseHandle(h);
+            if ok == 0 {
+                return 0.0;
+            }
+            // FILETIME is 100ns ticks from 1601-01-01; 11644473600s of those predate the epoch.
+            let ticks = ((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64;
+            ticks as f64 / 1e7 - 11_644_473_600.0
         }
     }
 
@@ -297,6 +325,62 @@ mod imp {
         unsafe { libc::getppid() as i64 }
     }
 
+    /// Wall-clock start of [pid] in unix seconds; 0.0 when it can't be read.
+    pub fn process_start(pid: i64) -> f64 {
+        if pid <= 0 {
+            return 0.0;
+        }
+        start_secs(pid)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn start_secs(pid: i64) -> f64 {
+        unsafe {
+            let mut info: libc::proc_bsdinfo = std::mem::zeroed();
+            let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+            if libc::proc_pidinfo(
+                pid as libc::c_int,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                &mut info as *mut _ as *mut libc::c_void,
+                size,
+            ) != size
+            {
+                return 0.0;
+            }
+            info.pbi_start_tvsec as f64 + info.pbi_start_tvusec as f64 / 1e6
+        }
+    }
+
+    /// stat field 22 is the start in clock ticks since boot, and /proc/stat's btime anchors boot
+    /// to the wall clock. comm (field 2) can hold spaces and parens, so count from the last ')'.
+    #[cfg(not(target_os = "macos"))]
+    fn start_secs(pid: i64) -> f64 {
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            return 0.0;
+        };
+        let Some((_, fields)) = stat.rsplit_once(')') else {
+            return 0.0;
+        };
+        let Some(ticks) = fields
+            .split_whitespace()
+            .nth(19)
+            .and_then(|t| t.parse::<f64>().ok())
+        else {
+            return 0.0;
+        };
+        let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
+        let btime = std::fs::read_to_string("/proc/stat").ok().and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("btime "))
+                .and_then(|b| b.trim().parse::<f64>().ok())
+        });
+        match btime {
+            Some(b) if hz > 0.0 => b + ticks / hz,
+            _ => 0.0,
+        }
+    }
+
     /// pid → (parent pid, comm) for every process, from one `ps` call. comm can be a full
     /// path containing spaces ("…/IntelliJ IDEA.app/…/idea"), so split only twice. Shared
     /// with the wezterm terminal adapter.
@@ -472,6 +556,6 @@ mod imp {
 
 #[cfg(any(windows, target_os = "macos"))]
 pub use imp::process_map;
-pub use imp::{annotate, attach_parent_console, is_alive, parent_pid};
+pub use imp::{annotate, attach_parent_console, is_alive, parent_pid, process_start};
 #[cfg(windows)]
 pub use imp::{focus_window, main_window_for_pid};

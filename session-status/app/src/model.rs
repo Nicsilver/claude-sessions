@@ -31,6 +31,19 @@ pub fn now() -> f64 {
     unix_now()
 }
 
+/// Is [pid] still the Claude process this session recorded? Alive is not enough: pids get
+/// recycled, so the process holding it now must also have started *before* the session last
+/// wrote its state. Anything newer inherited the number from a session that is long over.
+pub fn pid_is_session(pid: i64, updated: f64) -> bool {
+    platform::is_alive(pid) && started_before(platform::process_start(pid), updated)
+}
+
+/// Split out so the rule is testable without live processes. Unknown values (0) fail open — an
+/// unreadable start time or a state file without a timestamp must not hide a real session.
+fn started_before(start: f64, updated: f64) -> bool {
+    start <= 0.0 || updated <= 0.0 || start <= updated
+}
+
 /// Load all live sessions, sorted the way the widget shows them.
 pub fn load() -> Vec<Sess> {
     let mutes = load_f64_map(&mutes_path());
@@ -52,8 +65,16 @@ pub fn load() -> Vec<Sess> {
         };
 
         let pid = i64_of(&root, "pid");
-        if pid > 0 && !platform::is_alive(pid) {
-            continue; // the session's Claude process is gone
+        let updated = f64_of(&root, "updated_at");
+        if pid > 0 && !pid_is_session(pid, updated) {
+            // The session's Claude process is gone. Delete the file rather than skip it: the OS
+            // recycles pids (within days on Windows), so a state file left lying around comes
+            // back to life the moment an unrelated process inherits its pid — an ancient session
+            // reappearing in the list, popping the panel open, and offering to close a tab that
+            // belongs to whatever now owns the number. SessionEnd normally removes the file, but
+            // it never fires for a crashed or force-killed session.
+            let _ = std::fs::remove_file(e.path());
+            continue;
         }
         let terminal = str_of(&root, "terminal");
         let term_pid = i64_of(&root, "term_pid");
@@ -94,7 +115,7 @@ pub fn load() -> Vec<Sess> {
                     s
                 }
             },
-            updated: f64_of(&root, "updated_at"),
+            updated,
             message: str_of(&root, "message"),
             terminal,
             term_pid,
@@ -217,5 +238,27 @@ fn save_map<T: serde::Serialize>(path: &std::path::Path, m: &HashMap<String, T>)
     }
     if let Ok(text) = serde_json::to_string(m) {
         let _ = std::fs::write(path, text);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_process_older_than_the_state_file_is_the_session() {
+        assert!(started_before(1_700_000_000.0, 1_700_000_600.0));
+    }
+
+    #[test]
+    fn a_process_started_after_the_last_write_is_a_recycled_pid() {
+        // The pid of a session last seen a week ago, now held by a browser started minutes ago.
+        assert!(!started_before(1_700_600_000.0, 1_700_000_000.0));
+    }
+
+    #[test]
+    fn unreadable_start_or_timestamp_fails_open() {
+        assert!(started_before(0.0, 1_700_000_000.0));
+        assert!(started_before(1_700_000_000.0, 0.0));
     }
 }
