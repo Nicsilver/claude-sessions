@@ -11,7 +11,8 @@ mod imp {
     use crate::recorder::transcript_title;
     use std::collections::{HashMap, HashSet};
     use windows_sys::Win32::Foundation::{
-        CloseHandle, FILETIME, HWND, INVALID_HANDLE_VALUE, LPARAM, RECT,
+        CloseHandle, GetLastError, ERROR_ACCESS_DENIED, FILETIME, HWND, INVALID_HANDLE_VALUE,
+        LPARAM, RECT, WAIT_OBJECT_0,
     };
     use windows_sys::Win32::System::Console::{
         AttachConsole, FreeConsole, GetConsoleTitleW, ATTACH_PARENT_PROCESS,
@@ -20,7 +21,7 @@ mod imp {
         CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPPROCESS,
     };
     use windows_sys::Win32::System::Threading::{
-        AttachThreadInput, GetCurrentThreadId, GetProcessTimes, OpenProcess,
+        AttachThreadInput, GetCurrentThreadId, GetProcessTimes, OpenProcess, WaitForSingleObject,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -81,17 +82,32 @@ mod imp {
         process_map().get(&pid).map(|(p, _)| *p).unwrap_or(0)
     }
 
+    /// SYNCHRONIZE is what makes the answer trustworthy, and windows-sys only exports the
+    /// constant under a file-system feature we don't otherwise need.
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+
     pub fn is_alive(pid: i64) -> bool {
         if pid <= 0 {
             return false;
         }
         unsafe {
-            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+            let h = OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+                0,
+                pid as u32,
+            );
             if h.is_null() {
-                return false;
+                // A pid we may not touch (elevated, another user) still exists — fail open like
+                // the unix EPERM case. Only ERROR_INVALID_PARAMETER means "no such process".
+                return GetLastError() == ERROR_ACCESS_DENIED;
             }
+            // Opening the process is NOT proof it runs: the kernel object outlives the process
+            // for as long as anyone holds a handle to it, so OpenProcess keeps succeeding on a
+            // pid that exited hours ago (conhost and terminals hold such handles routinely).
+            // A process object is signalled exactly when the process has exited.
+            let exited = WaitForSingleObject(h, 0) == WAIT_OBJECT_0;
             CloseHandle(h);
-            true
+            !exited
         }
     }
 
@@ -552,6 +568,22 @@ mod imp {
     }
 
     pub fn attach_parent_console() {} // unix CLIs already share the terminal's stdio
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    #[test]
+    fn an_exited_process_is_not_alive_while_a_handle_to_it_survives() {
+        // `Child` holds the process handle open, reproducing what kept ghost sessions in the
+        // list: the kernel object outlives the process, so OpenProcess keeps succeeding.
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit"])
+            .spawn()
+            .expect("spawn cmd");
+        let pid = child.id() as i64;
+        child.wait().expect("wait");
+        assert!(!super::is_alive(pid));
+    }
 }
 
 #[cfg(any(windows, target_os = "macos"))]

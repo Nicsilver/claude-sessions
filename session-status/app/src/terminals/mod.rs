@@ -107,8 +107,11 @@ fn fallback_close(s: &Sess) {
     }
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let _ = std::process::Command::new("taskkill")
             .args(["/PID", &s.pid.to_string(), "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW) // the widget is a GUI app; taskkill would flash a console
             .spawn();
     }
     #[cfg(unix)]
