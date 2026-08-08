@@ -968,26 +968,38 @@ fn classify_turn_text(text: &str) -> (String, String) {
 }
 
 fn current_turn_text(transcript: &str) -> String {
-    let entries = read_tail_entries(transcript, 1_048_576);
+    current_turn_text_entries(&read_tail_entries(transcript, 1_048_576))
+}
+
+/// The transcript entry's inner message object (unwrapping the `{message:{...}}` envelope) and its
+/// role — falling back to the entry's `type` (system/attachment/...) when there is no chat role.
+fn msg_and_role(obj: &Value) -> (&Value, String) {
+    let m = if obj.get("message").map(Value::is_object).unwrap_or(false) {
+        obj.get("message").unwrap()
+    } else {
+        obj
+    };
+    let r = str_of(m, "role");
+    let role = if r.is_empty() { str_of(obj, "type") } else { r };
+    (m, role)
+}
+
+fn content_has_block(m: &Value, kind: &str) -> bool {
+    m.get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|arr| arr.iter().any(|b| str_of(b, "type") == kind))
+}
+
+/// The assistant text of the last completed turn (the message after the last user message), or
+/// empty when the last thing in the transcript is an unanswered user prompt.
+fn current_turn_text_entries(entries: &[Value]) -> String {
     let (mut last_user, mut a_idx) = (-1i64, -1i64);
     let mut a_text = String::new();
     for (i, obj) in entries.iter().enumerate() {
         if !obj.is_object() {
             continue;
         }
-        let m = if obj.get("message").map(Value::is_object).unwrap_or(false) {
-            obj.get("message").unwrap()
-        } else {
-            obj
-        };
-        let role = {
-            let r = str_of(m, "role");
-            if r.is_empty() {
-                str_of(obj, "type")
-            } else {
-                r
-            }
-        };
+        let (m, role) = msg_and_role(obj);
         if role == "user" {
             last_user = i as i64;
         } else if role == "assistant" {
@@ -1003,6 +1015,44 @@ fn current_turn_text(transcript: &str) -> String {
     } else {
         String::new()
     }
+}
+
+/// Is the assistant's current turn still running? True when a tool call is in flight (the last
+/// real message is an assistant `tool_use` with no result yet — a multi-minute build emits no hook
+/// until it returns) or a `tool_result` Claude is about to act on. Meta rows (the Claude Code 2.1
+/// away-summary/recap, attachments, file-history snapshots) are skipped — only real user/assistant
+/// messages mark the turn boundary.
+fn turn_in_progress(entries: &[Value]) -> bool {
+    for obj in entries.iter().rev() {
+        if !obj.is_object() {
+            continue;
+        }
+        let (m, role) = msg_and_role(obj);
+        match role.as_str() {
+            "assistant" => return content_has_block(m, "tool_use"),
+            "user" => return content_has_block(m, "tool_result"),
+            _ => continue,
+        }
+    }
+    false
+}
+
+/// Re-derive the true state of a session the state file still calls "working" but whose recorder
+/// hooks have gone quiet. Claude Code fires PostToolUse on every tool call, so a stale "working"
+/// means one of: a single long-running tool is in flight (still working, stays green); the turn
+/// finished but no Stop hook classified it (trust the transcript's ●/○/◐ markers); or you typed a
+/// follow-up and walked away — Claude Code 2.1's away-summary — leaving an unanswered prompt with
+/// no Stop (idle, so a finished chat stops reading as active/green).
+pub fn reconcile_stale_working(transcript: &str) -> String {
+    let entries = read_tail_entries(transcript, 262_144);
+    if turn_in_progress(&entries) {
+        return "working".into();
+    }
+    let text = current_turn_text_entries(&entries);
+    if text.trim().is_empty() {
+        return "idle".into();
+    }
+    classify_turn_text(&text).0
 }
 
 fn read_all_entries(path: &str) -> Vec<Value> {
@@ -1181,6 +1231,122 @@ mod tests {
             classify_turn_text("Do you want X?\nOkay, done.\n●").0,
             "done"
         );
+    }
+
+    fn user_prompt(text: &str) -> Value {
+        json!({ "type": "user", "message": { "role": "user", "content": text } })
+    }
+    fn assistant_text(text: &str) -> Value {
+        json!({ "type": "assistant", "message": { "role": "assistant",
+            "content": [ { "type": "text", "text": text } ] } })
+    }
+    fn assistant_tool_use(id: &str) -> Value {
+        json!({ "type": "assistant", "message": { "role": "assistant",
+            "content": [ { "type": "tool_use", "id": id, "name": "Bash" } ] } })
+    }
+    fn tool_result(id: &str) -> Value {
+        json!({ "type": "user", "message": { "role": "user",
+            "content": [ { "type": "tool_result", "tool_use_id": id, "content": "ok" } ] } })
+    }
+    fn away_summary() -> Value {
+        json!({ "type": "system", "subtype": "away_summary", "content": "recap...\n\n●" })
+    }
+
+    #[test]
+    fn turn_in_progress_true_while_a_tool_runs() {
+        // The assistant issued a tool_use and no result has come back — a long build is running.
+        let entries = [user_prompt("build it"), assistant_tool_use("t1")];
+        assert!(turn_in_progress(&entries));
+    }
+
+    #[test]
+    fn turn_in_progress_true_right_after_a_tool_result() {
+        // Claude has the tool output and is about to continue the same turn.
+        let entries = [
+            user_prompt("build it"),
+            assistant_tool_use("t1"),
+            tool_result("t1"),
+        ];
+        assert!(turn_in_progress(&entries));
+    }
+
+    #[test]
+    fn turn_over_after_final_assistant_text() {
+        let entries = [
+            user_prompt("build it"),
+            assistant_tool_use("t1"),
+            tool_result("t1"),
+            assistant_text("all done\n\n●"),
+        ];
+        assert!(!turn_in_progress(&entries));
+    }
+
+    #[test]
+    fn turn_over_on_an_unanswered_human_prompt() {
+        // The reported bug: a follow-up you walked away from, with no assistant turn after it.
+        let entries = [
+            assistant_text("previous turn\n\n●"),
+            user_prompt("I got a mail the build failed"),
+        ];
+        assert!(!turn_in_progress(&entries));
+    }
+
+    #[test]
+    fn meta_rows_do_not_end_the_turn() {
+        // A trailing away-summary/recap (Claude Code 2.1) must not be read as the turn boundary.
+        let entries = [
+            user_prompt("do X"),
+            assistant_tool_use("t1"),
+            away_summary(),
+        ];
+        assert!(turn_in_progress(&entries));
+    }
+
+    #[test]
+    fn reconcile_idle_for_a_walked_away_follow_up() {
+        // Assistant finished (●, Stop wrote "done"), then a follow-up fired UserPromptSubmit
+        // ("working") with no assistant turn / Stop after — the exact stuck-green case.
+        let lines = [
+            assistant_text("Both done, brother. ✅"),
+            user_prompt("I got a mail the build failed"),
+            away_summary(),
+        ];
+        let path = write_temp_jsonl("reconcile-walkaway", &lines);
+        assert_eq!(reconcile_stale_working(&path), "idle");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reconcile_keeps_green_while_a_build_runs() {
+        let lines = [user_prompt("cargo build"), assistant_tool_use("t1")];
+        let path = write_temp_jsonl("reconcile-build", &lines);
+        assert_eq!(reconcile_stale_working(&path), "working");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reconcile_trusts_a_stopless_but_finished_turn() {
+        // No Stop hook fired, but the transcript shows the turn ended asking a question (○) —
+        // surface it as your-turn rather than leaving it green.
+        let lines = [
+            user_prompt("which db?"),
+            assistant_text("Postgres or SQLite?\n○"),
+        ];
+        let path = write_temp_jsonl("reconcile-yourturn", &lines);
+        assert_eq!(reconcile_stale_working(&path), "yourturn");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn write_temp_jsonl(tag: &str, entries: &[Value]) -> String {
+        let mut p = std::env::temp_dir();
+        p.push(format!("cs-test-{}-{}.jsonl", tag, std::process::id()));
+        let body: String = entries
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&p, body).unwrap();
+        p.to_string_lossy().into_owned()
     }
 
     #[test]

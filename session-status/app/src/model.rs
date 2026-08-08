@@ -27,6 +27,12 @@ impl Sess {
     }
 }
 
+/// How long a "working" session can go without a recorder hook before the widget stops trusting
+/// the green and re-derives its state from the transcript. A genuinely busy Claude fires
+/// PostToolUse on every tool call, so a gap this long means the turn has gone quiet; long-running
+/// single tools (builds) are still kept green by the transcript check itself. Tunable.
+const WORKING_STALE_SECS: f64 = 180.0;
+
 pub fn now() -> f64 {
     unix_now()
 }
@@ -46,6 +52,7 @@ fn started_before(start: f64, updated: f64) -> bool {
 
 /// Load all live sessions, sorted the way the widget shows them.
 pub fn load() -> Vec<Sess> {
+    let n = now();
     let mutes = load_f64_map(&mutes_path());
     let labels = load_str_map(&labels_path());
     let mut out = Vec::new();
@@ -111,6 +118,12 @@ pub fn load() -> Vec<Sess> {
                 let s = str_of(&root, "state");
                 if s.is_empty() {
                     "?".into()
+                } else if s == "working" && updated > 0.0 && n - updated > WORKING_STALE_SECS {
+                    // "working" is only refreshed while Claude Code keeps firing hooks. Once one
+                    // has gone quiet this long, re-derive the truth from the transcript so a
+                    // finished-but-Stop-less chat (e.g. a follow-up you walked away from) stops
+                    // showing green. See recorder::reconcile_stale_working.
+                    crate::recorder::reconcile_stale_working(&str_of(&root, "transcript"))
                 } else {
                     s
                 }
@@ -126,7 +139,6 @@ pub fn load() -> Vec<Sess> {
         });
     }
 
-    let n = now();
     out.sort_by(|a, b| {
         let (am, bm) = (a.muted(n), b.muted(n));
         if am != bm {
