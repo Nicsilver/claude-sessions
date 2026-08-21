@@ -66,6 +66,20 @@ fn main() {
                 }
             }
         }
+        // Diagnostic: open a session in the configured terminal, exactly like the `+` button.
+        // Useful for checking a terminal adapter without the GUI in the way — notably whether
+        // Terminal.app lands a tab or falls back to a window.
+        Some("new-session") => {
+            platform::attach_parent_console();
+            let target = args.get(1).cloned().unwrap_or_else(|| {
+                terminals::spawn_targets()
+                    .first()
+                    .map_or("", |(id, _)| id)
+                    .into()
+            });
+            terminals::new_session(&target, &["echo diagnostic".into()]);
+            std::process::exit(0)
+        }
         // Add the optional ●/○/◐ turn-marker instruction to the global CLAUDE.md, or upgrade
         // an outdated block in place.
         Some("markers") => {
