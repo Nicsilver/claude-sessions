@@ -16,6 +16,11 @@ mod wezterm;
 #[cfg(windows)]
 mod wt;
 
+/// Terminal.app can only open a tab by sending Cmd+T, which needs Accessibility permission;
+/// the GUI polls this after a spawn to offer the explainer the first time it is refused.
+#[cfg(target_os = "macos")]
+pub use macos_terminal::take_accessibility_denied;
+
 pub trait Terminal: Sync {
     /// Matches the `terminal` field the recorder writes ("wt", "jetbrains", ...).
     fn id(&self) -> &'static str;

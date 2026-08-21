@@ -63,7 +63,7 @@ The block is versioned: when a newer app changes the marker convention, the widg
 
 Click the **⚙ gear** to configure:
 
-- **New sessions**: which terminal they open in, and the command typed into the new tab.
+- **New sessions**: which terminal they open in, and the command typed into the new tab. On macOS, Terminal.app has no scriptable "new tab", so the app opens one from its Shell menu for you — allowed only once Claude Sessions is ticked under **Privacy & Security › Accessibility**. Without it, new sessions open in a new window instead, and you are offered the setting once. (WezTerm and JetBrains terminals script tabs directly and need no permission.)
 - **Appearance**: match the system theme, or force dark / light.
 - **Global shortcuts**, rebindable, working from anywhere even with the dashboard hidden. Defaults: <kbd>Ctrl/⌘</kbd> <kbd>Alt</kbd> <kbd>J</kbd> jumps to the top session, <kbd>Ctrl/⌘</kbd> <kbd>Alt</kbd> <kbd>N</kbd> starts a new one.
 - **Start at login.**
