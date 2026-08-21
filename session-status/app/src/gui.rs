@@ -5,6 +5,8 @@
 
 use crate::{install, model, styles, terminals};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, WindowEvent};
@@ -57,9 +59,10 @@ pub fn run() -> tauri::Result<()> {
             // nothing running should go straight to the tray rather than flash the panel.
             let startup = Pulse::of(&model::load());
             if let Some(win) = app.get_webview_window("main") {
-                position_top_right(&win);
-                if !(auto_hide() && startup.live == 0) {
-                    let _ = win.show();
+                if auto_hide() && startup.live == 0 {
+                    restore_position(&win); // shown later, by auto-show or the tray
+                } else {
+                    show_remembered(&win);
                 }
             }
             // Heartbeat: reload sessions, refresh the tray badge, push to the frontend.
@@ -93,11 +96,13 @@ pub fn run() -> tauri::Result<()> {
             Ok(())
         })
         // Closing (Alt-F4 etc.) hides to the tray instead of quitting.
-        .on_window_event(|win, ev| {
-            if let WindowEvent::CloseRequested { api, .. } = ev {
+        .on_window_event(|win, ev| match ev {
+            WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = win.hide();
             }
+            WindowEvent::Moved(pos) => remember_position(win, *pos),
+            _ => {}
         })
         .run(tauri::generate_context!())?;
     Ok(())
@@ -134,7 +139,108 @@ fn position_top_right(win: &tauri::WebviewWindow) {
         - size.width as i32
         - (6.0 * mon.scale_factor()) as i32;
     let y = mon.position().y + (26.0 * mon.scale_factor()) as i32;
-    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+    place(win, tauri::PhysicalPosition::new(x, y));
+}
+
+// ---- remembered window position ----
+//
+// The panel is draggable (the header and footer are tauri drag regions), so re-pinning it to the
+// top-right on every show threw away wherever the user had put it. We now restore the last spot
+// they dragged it to and only fall back to the corner when there is none, or when it would land
+// off-screen (a monitor they no longer have).
+
+/// When to start trusting Moved events again. Our own `set_position` comes back through the
+/// Moved handler asynchronously — and more than once, since showing the window moves it again —
+/// so neither a flag around the call nor a one-shot coordinate match keeps our placement out of
+/// the user's remembered spot. Ignoring everything for a moment afterwards does.
+static SETTLE_UNTIL: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+const SETTLE: Duration = Duration::from_millis(750);
+/// Latest dragged-to position, flushed to disk by a trailing debounce — a drag emits a Moved
+/// event per frame, and each one would otherwise be a config write.
+static PENDING_POS: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+static FLUSH_PENDING: AtomicBool = AtomicBool::new(false);
+
+fn place(win: &tauri::WebviewWindow, pos: tauri::PhysicalPosition<i32>) {
+    *SETTLE_UNTIL.lock().unwrap() = Some(std::time::Instant::now() + SETTLE);
+    let _ = win.set_position(pos);
+}
+
+/// Show the panel where the user left it. Placed on both sides of `show`: macOS quietly drops a
+/// `set_position` on a window it has not realised yet, so the placement that actually sticks is
+/// the one after — the earlier call just keeps other platforms from flashing the old spot first.
+fn show_remembered(win: &tauri::WebviewWindow) {
+    restore_position(win);
+    let _ = win.show();
+    restore_position(win);
+}
+
+/// Restore the remembered position, or pin to the top-right when there isn't a usable one.
+fn restore_position(win: &tauri::WebviewWindow) {
+    match saved_position().filter(|&(x, y)| on_some_monitor(win, x, y)) {
+        Some((x, y)) => place(win, tauri::PhysicalPosition::new(x, y)),
+        None => position_top_right(win),
+    }
+}
+
+fn saved_position() -> Option<(i32, i32)> {
+    let cfg = crate::paths::load_json(&crate::paths::config_path());
+    let pos = cfg.get("window_pos")?;
+    Some((
+        pos.get("x")?.as_i64()? as i32,
+        pos.get("y")?.as_i64()? as i32,
+    ))
+}
+
+/// Whether the window's top-left still lands on a connected monitor. Checked against the title
+/// strip only: a position saved on a monitor that is now gone must not strand the panel where it
+/// cannot be dragged back.
+fn on_some_monitor(win: &tauri::WebviewWindow, x: i32, y: i32) -> bool {
+    let Ok(monitors) = win.available_monitors() else {
+        return false;
+    };
+    let rects: Vec<_> = monitors
+        .iter()
+        .map(|m| {
+            let (p, s) = (m.position(), m.size());
+            (p.x, p.y, s.width as i32, s.height as i32)
+        })
+        .collect();
+    point_on_any(&rects, x, y)
+}
+
+/// Pure half of `on_some_monitor` (monitor rects as x/y/w/h), so the bounds policy is testable
+/// without a display attached.
+fn point_on_any(rects: &[(i32, i32, i32, i32)], x: i32, y: i32) -> bool {
+    rects
+        .iter()
+        .any(|&(mx, my, mw, mh)| x >= mx && y >= my && x < mx + mw && y < my + mh)
+}
+
+fn remember_position(win: &tauri::Window, pos: tauri::PhysicalPosition<i32>) {
+    // A move of a window nobody can see is not a user preference.
+    if !win.is_visible().unwrap_or(false) {
+        return;
+    }
+    // Still inside the echo of our own placement rather than anything the user did.
+    if SETTLE_UNTIL
+        .lock()
+        .unwrap()
+        .is_some_and(|t| std::time::Instant::now() < t)
+    {
+        return;
+    }
+    *PENDING_POS.lock().unwrap() = Some((pos.x, pos.y));
+    if FLUSH_PENDING.swap(true, Ordering::SeqCst) {
+        return; // a flush is already scheduled; it will pick up this position
+    }
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_millis(500)); // ride out the rest of the drag
+        FLUSH_PENDING.store(false, Ordering::SeqCst);
+        let Some((x, y)) = *PENDING_POS.lock().unwrap() else {
+            return;
+        };
+        write_config(|root| root["window_pos"] = json!({ "x": x, "y": y }));
+    });
 }
 
 // ---- auto-hide / auto-show ----
@@ -201,10 +307,9 @@ fn apply_auto_visibility(app: &tauri::AppHandle, prev: &Pulse, now: &Pulse) {
     };
     match auto_action(prev, now, auto_hide(), auto_show()) {
         Auto::Show => {
-            position_top_right(&win);
-            // show() without set_focus: this is a passive panel reacting to a background event,
-            // and stealing focus mid-keystroke would be worse than not showing at all.
-            let _ = win.show();
+            // No set_focus: this is a passive panel reacting to a background event, and stealing
+            // focus mid-keystroke would be worse than not showing at all.
+            show_remembered(&win);
         }
         Auto::Hide => {
             let _ = win.hide();
@@ -220,8 +325,7 @@ fn toggle_window(app: &tauri::AppHandle) {
     if win.is_visible().unwrap_or(false) {
         let _ = win.hide();
     } else {
-        position_top_right(&win);
-        let _ = win.show();
+        show_remembered(&win);
         let _ = win.set_focus();
     }
 }
@@ -278,9 +382,9 @@ fn register_hotkeys(app: &tauri::AppHandle) {
 
     let new = hotkey_new();
     if !new.is_empty() {
-        if let Err(e) = gs.on_shortcut(new.as_str(), |_app, _sc, ev| {
+        if let Err(e) = gs.on_shortcut(new.as_str(), |app, _sc, ev| {
             if ev.state() == ShortcutState::Pressed {
-                spawn_new_session();
+                spawn_new_session(app);
             }
         }) {
             eprintln!("claude-sessions: could not bind new-session hotkey {new:?}: {e}");
@@ -486,15 +590,56 @@ fn close_session(id: String) {
 }
 
 #[tauri::command]
-fn new_session() {
-    spawn_new_session();
+fn new_session(app: tauri::AppHandle) {
+    spawn_new_session(&app);
 }
 
 /// Open a new Claude session in the configured terminal. Shared by the `+` button command and
 /// the new-session global hotkey.
-fn spawn_new_session() {
+fn spawn_new_session(app: &tauri::AppHandle) {
     let (target, cmds) = (new_session_terminal(), new_session_cmds());
-    std::thread::spawn(move || terminals::new_session(&target, &cmds));
+    let app = app.clone();
+    std::thread::spawn(move || {
+        terminals::new_session(&target, &cmds);
+        #[cfg(target_os = "macos")]
+        if terminals::take_accessibility_denied() {
+            offer_accessibility(&app);
+        }
+        let _ = &app;
+    });
+}
+
+/// Terminal.app has no scriptable "new tab", so we click the menu item for it — which macOS
+/// refuses until the app is trusted for Accessibility. Explained once, then never again: the
+/// fallback (a new window) is what the widget always did, so this is an offer, not an error.
+#[cfg(target_os = "macos")]
+fn offer_accessibility(app: &tauri::AppHandle) {
+    if config_bool("accessibility_asked", false) {
+        return;
+    }
+    write_config(|root| root["accessibility_asked"] = json!(true));
+
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+    app.dialog()
+        .message(concat!(
+            "Terminal.app offers no way to script a new tab, so Claude Sessions opens one from ",
+            "its Shell menu for you \u{2014} which macOS only allows for apps trusted for ",
+            "Accessibility.\n\nUntil then, new sessions open in a new window instead.\n\n",
+            "To switch to tabs: open Privacy & Security \u{203a} Accessibility, add Claude ",
+            "Sessions, then quit and reopen it.",
+        ))
+        .title("claude-sessions \u{2014} open new sessions in a tab?")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Open Accessibility settings".into(),
+            "Keep using windows".into(),
+        ))
+        .show(|open| {
+            if open {
+                let _ = std::process::Command::new("open")
+                    .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                    .spawn();
+            }
+        });
 }
 
 // ---- options (config.json in ~/.claude/session-status/) ----
@@ -506,6 +651,23 @@ fn config_str(key: &str, default: &str) -> String {
         .filter(|s| !s.trim().is_empty())
         .unwrap_or(default)
         .to_string()
+}
+
+/// Read-modify-write config.json, creating it (and its directory) when missing.
+fn write_config(edit: impl FnOnce(&mut Value)) {
+    let path = crate::paths::config_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let mut root = crate::paths::load_json(&path);
+    if !root.is_object() {
+        root = json!({});
+    }
+    edit(&mut root);
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&root).unwrap_or_default(),
+    );
 }
 
 fn config_bool(key: &str, default: bool) -> bool {
@@ -603,25 +765,15 @@ struct Settings {
 #[tauri::command]
 fn set_config(app: tauri::AppHandle, settings: Settings) {
     use tauri_plugin_autostart::ManagerExt;
-    let path = crate::paths::config_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let mut root = crate::paths::load_json(&path);
-    if !root.is_object() {
-        root = json!({});
-    }
-    root["new_session_cmd"] = json!(settings.new_session_cmd.trim());
-    root["new_session_terminal"] = json!(settings.new_session_terminal.trim());
-    root["theme"] = json!(settings.theme.trim());
-    root["hotkey_jump"] = json!(settings.hotkey_jump.trim());
-    root["hotkey_new"] = json!(settings.hotkey_new.trim());
-    root["auto_hide"] = json!(settings.auto_hide);
-    root["auto_show"] = json!(settings.auto_show);
-    let _ = std::fs::write(
-        &path,
-        serde_json::to_string_pretty(&root).unwrap_or_default(),
-    );
+    write_config(|root| {
+        root["new_session_cmd"] = json!(settings.new_session_cmd.trim());
+        root["new_session_terminal"] = json!(settings.new_session_terminal.trim());
+        root["theme"] = json!(settings.theme.trim());
+        root["hotkey_jump"] = json!(settings.hotkey_jump.trim());
+        root["hotkey_new"] = json!(settings.hotkey_new.trim());
+        root["auto_hide"] = json!(settings.auto_hide);
+        root["auto_show"] = json!(settings.auto_show);
+    });
     // Apply the new bindings immediately.
     register_hotkeys(&app);
     // Launch-at-login is OS state — only touch it when the toggle actually changed.
@@ -673,6 +825,30 @@ mod tests {
     }
 
     const BOTH: (bool, bool) = (true, true);
+
+    // A laptop screen with an external monitor sitting to its left (negative x), the layout
+    // that strands a remembered position once the external is unplugged.
+    const SCREENS: [(i32, i32, i32, i32); 2] = [(0, 0, 1512, 982), (-1920, -200, 1920, 1080)];
+
+    #[test]
+    fn remembered_position_is_kept_when_it_is_still_on_a_screen() {
+        assert!(point_on_any(&SCREENS, 1200, 40));
+        assert!(point_on_any(&SCREENS, -1800, 0));
+    }
+
+    #[test]
+    fn remembered_position_is_dropped_when_its_monitor_is_gone() {
+        assert!(!point_on_any(&SCREENS[..1], -1800, 0));
+        assert!(!point_on_any(&SCREENS, 4000, 40));
+        assert!(!point_on_any(&SCREENS, 1200, 2000));
+    }
+
+    #[test]
+    fn monitor_bounds_are_half_open() {
+        assert!(point_on_any(&SCREENS[..1], 0, 0));
+        assert!(!point_on_any(&SCREENS[..1], 1512, 0));
+        assert!(!point_on_any(&SCREENS[..1], 0, 982));
+    }
 
     #[test]
     fn shows_when_the_first_session_appears() {

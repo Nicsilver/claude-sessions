@@ -50,6 +50,7 @@ The block is versioned: when a newer app changes the marker convention, the widg
 | Middle-click | Mute it for an hour (sinks to the bottom) |
 | <kbd>Alt</kbd>-click | Rename it inline |
 | <kbd>Shift</kbd>-click | Have the AI name it from the transcript (auto-labeling can still evolve it later) |
+| Drag the title bar | Move the panel — it stays where you put it, and only returns to the top-right corner if that screen goes away |
 | `+` / `×` | New Claude session / hide to tray |
 | ⚙ | Options |
 | Tray left-click | Jump to the top session |
