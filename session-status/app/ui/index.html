@@ -93,11 +93,13 @@
     -webkit-font-smoothing: antialiased;
   }
   #panel {
-    margin:14px;                              /* gutter the drop shadow falls into */
+    /* No top gutter, so a native drag (which clamps the window flush under the menu bar) leaves
+       the panel flush too, like a normal window — the shadow is downward, so it needs the gutter
+       on the sides and bottom, not the top. */
+    margin:0 14px 14px;
     background:var(--bg);
     border-radius:10px;
     border:1px solid var(--panel-border);
-    /* Must fully fade inside the 14px gutter or it clips with a hard edge. */
     box-shadow:var(--shadow);
     overflow:hidden;
   }
@@ -508,7 +510,7 @@ function fitHeight() {
   // Cap the list so a long session list scrolls instead of running off the screen.
   const cap = Math.max(120, screen.availHeight - 140);
   document.getElementById("list").style.maxHeight = cap + "px";
-  const h = Math.ceil(document.getElementById("panel").getBoundingClientRect().height) + 28;
+  const h = Math.ceil(document.getElementById("panel").getBoundingClientRect().height) + 14;
   if (h !== lastH) {
     lastH = h;
     appWindow.setSize(new LogicalSize(328, h));

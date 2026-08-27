@@ -5,7 +5,6 @@
 
 use crate::{install, model, styles, terminals};
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -90,19 +89,25 @@ pub fn run() -> tauri::Result<()> {
                         let _ = handle.emit("sessions", payload.clone());
                         last_emitted = Some(payload);
                     }
+                    // Persist the panel's spot and recover it when a display sleeps/disconnects.
+                    // Monitor + window-geometry queries must run on the main thread.
+                    let h = handle.clone();
+                    let _ = handle.run_on_main_thread(move || {
+                        if let Some(win) = h.get_webview_window("main") {
+                            window_upkeep(&win);
+                        }
+                    });
                     std::thread::sleep(Duration::from_millis(1500));
                 }
             });
             Ok(())
         })
         // Closing (Alt-F4 etc.) hides to the tray instead of quitting.
-        .on_window_event(|win, ev| match ev {
-            WindowEvent::CloseRequested { api, .. } => {
+        .on_window_event(|win, ev| {
+            if let WindowEvent::CloseRequested { api, .. } = ev {
                 api.prevent_close();
                 let _ = win.hide();
             }
-            WindowEvent::Moved(pos) => remember_position(win, *pos),
-            _ => {}
         })
         .run(tauri::generate_context!())?;
     Ok(())
@@ -144,25 +149,76 @@ fn position_top_right(win: &tauri::WebviewWindow) {
 
 // ---- remembered window position ----
 //
-// The panel is draggable (the header and footer are tauri drag regions), so re-pinning it to the
-// top-right on every show threw away wherever the user had put it. We now restore the last spot
-// they dragged it to and only fall back to the corner when there is none, or when it would land
-// off-screen (a monitor they no longer have).
-
-/// When to start trusting Moved events again. Our own `set_position` comes back through the
-/// Moved handler asynchronously — and more than once, since showing the window moves it again —
-/// so neither a flag around the call nor a one-shot coordinate match keeps our placement out of
-/// the user's remembered spot. Ignoring everything for a moment afterwards does.
-static SETTLE_UNTIL: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-const SETTLE: Duration = Duration::from_millis(750);
-/// Latest dragged-to position, flushed to disk by a trailing debounce — a drag emits a Moved
-/// event per frame, and each one would otherwise be a config write.
-static PENDING_POS: Mutex<Option<(i32, i32)>> = Mutex::new(None);
-static FLUSH_PENDING: AtomicBool = AtomicBool::new(false);
+// The panel is draggable (native drag regions), so re-pinning it to the top-right on every show
+// threw away wherever the user had put it. We restore the last spot they left it and only fall
+// back to the corner when there is none, or when it would land off-screen.
+//
+// Persistence and display-change recovery both live in `window_upkeep`, run once per heartbeat on
+// the main thread. Doing it there — rather than off a `Moved` event — is what makes it robust to a
+// display sleeping: on the tick where the monitor layout changes we snap back and refuse to save,
+// so macOS shoving the window onto another screen never overwrites the remembered spot.
 
 fn place(win: &tauri::WebviewWindow, pos: tauri::PhysicalPosition<i32>) {
-    *SETTLE_UNTIL.lock().unwrap() = Some(std::time::Instant::now() + SETTLE);
     let _ = win.set_position(pos);
+}
+
+/// Last observed monitor layout, so a display sleeping/disconnecting can be detected.
+static LAST_MONITORS: Mutex<Option<String>> = Mutex::new(None);
+/// Suppress position saves for a moment after a layout change, so a brief disconnect (a display
+/// sleeping and waking) doesn't overwrite the remembered spot with the fallback we snapped to.
+static SAVE_SUPPRESSED_UNTIL: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+fn monitor_fingerprint(win: &tauri::WebviewWindow) -> String {
+    let Ok(monitors) = win.available_monitors() else {
+        return String::new();
+    };
+    let mut parts: Vec<String> = monitors
+        .iter()
+        .map(|m| {
+            let (p, s) = (m.position(), m.size());
+            format!("{},{},{},{}", p.x, p.y, s.width, s.height)
+        })
+        .collect();
+    parts.sort();
+    parts.join(";")
+}
+
+/// One heartbeat's worth of window bookkeeping, on the main thread: remember where the user has
+/// dragged the panel, and recover its spot when a display sleeps or disconnects under it.
+fn window_upkeep(win: &tauri::WebviewWindow) {
+    let fp = monitor_fingerprint(win);
+    let mut last = LAST_MONITORS.lock().unwrap();
+    let changed = last.as_ref().is_some_and(|prev| prev != &fp);
+    let first = last.is_none();
+    *last = Some(fp);
+    drop(last);
+
+    // Layout changed: macOS has likely relocated the window. Snap back to the remembered spot
+    // (or the corner if that monitor is gone) and don't trust positions for a few seconds.
+    if changed {
+        *SAVE_SUPPRESSED_UNTIL.lock().unwrap() =
+            Some(std::time::Instant::now() + Duration::from_secs(6));
+        if win.is_visible().unwrap_or(false) {
+            restore_position(win);
+        }
+        return;
+    }
+    if first || !win.is_visible().unwrap_or(false) {
+        return;
+    }
+    if SAVE_SUPPRESSED_UNTIL
+        .lock()
+        .unwrap()
+        .is_some_and(|t| std::time::Instant::now() < t)
+    {
+        return;
+    }
+    // Stable layout: persist the current spot if the user has moved it somewhere on a monitor.
+    if let Ok(pos) = win.outer_position() {
+        if on_some_monitor(win, pos.x, pos.y) && saved_position() != Some((pos.x, pos.y)) {
+            write_config(|root| root["window_pos"] = json!({ "x": pos.x, "y": pos.y }));
+        }
+    }
 }
 
 /// Show the panel where the user left it. Placed on both sides of `show`: macOS quietly drops a
@@ -214,33 +270,6 @@ fn point_on_any(rects: &[(i32, i32, i32, i32)], x: i32, y: i32) -> bool {
     rects
         .iter()
         .any(|&(mx, my, mw, mh)| x >= mx && y >= my && x < mx + mw && y < my + mh)
-}
-
-fn remember_position(win: &tauri::Window, pos: tauri::PhysicalPosition<i32>) {
-    // A move of a window nobody can see is not a user preference.
-    if !win.is_visible().unwrap_or(false) {
-        return;
-    }
-    // Still inside the echo of our own placement rather than anything the user did.
-    if SETTLE_UNTIL
-        .lock()
-        .unwrap()
-        .is_some_and(|t| std::time::Instant::now() < t)
-    {
-        return;
-    }
-    *PENDING_POS.lock().unwrap() = Some((pos.x, pos.y));
-    if FLUSH_PENDING.swap(true, Ordering::SeqCst) {
-        return; // a flush is already scheduled; it will pick up this position
-    }
-    std::thread::spawn(|| {
-        std::thread::sleep(Duration::from_millis(500)); // ride out the rest of the drag
-        FLUSH_PENDING.store(false, Ordering::SeqCst);
-        let Some((x, y)) = *PENDING_POS.lock().unwrap() else {
-            return;
-        };
-        write_config(|root| root["window_pos"] = json!({ "x": x, "y": y }));
-    });
 }
 
 // ---- auto-hide / auto-show ----
