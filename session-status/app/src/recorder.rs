@@ -40,6 +40,10 @@ pub fn record(state: &str) {
 
     let prev = load_json(&path);
     let (reg, reg_path) = registry_for(&sid);
+    // A real /rename is a permanent choice — pin it now so no later auto/AI/pivot label can
+    // take the name back if user_named() ever stops recognising it (CC re-derives nameSource,
+    // or the applied-name echo collides). The pin outranks every other source everywhere.
+    pin_user_rename(&sid, &reg);
 
     let cwd = first_nonempty(&[
         str_of(&reg, "cwd"),
@@ -317,6 +321,31 @@ fn user_named(reg: &Value, sid: &str) -> bool {
     !name.trim().is_empty()
         && str_of(reg, "nameSource") != "derived"
         && cc_applied_name(sid).as_deref() != Some(name.trim())
+}
+
+/// Snapshot a genuine /rename into the custom-pin store, making it permanent: the pin is the
+/// top source in both derive_label and the widget, and it blocks the AI labeler. Only fires
+/// while the registry name is still recognisably a user choice, and only when it differs from
+/// the current pin, so it costs nothing on the steady state, a later /rename updates the pin,
+/// and a shift-click forced relabel (which clears the pin and syncs its own name back) is not
+/// re-pinned.
+fn pin_user_rename(sid: &str, reg: &Value) {
+    if !user_named(reg, sid) {
+        return;
+    }
+    let name = str_of(reg, "name");
+    let name = name.trim();
+    if name.is_empty() || custom_label(sid).as_deref() == Some(name) {
+        return;
+    }
+    let mut m = load_json(&labels_path());
+    if !m.is_object() {
+        m = Value::Object(Map::new());
+    }
+    if let Some(o) = m.as_object_mut() {
+        o.insert(sid.to_string(), json!(name));
+        write_atomic(&labels_path(), &m);
+    }
 }
 
 /// Prompts after which a drifted AI-labeled session earns one fresh naming call. 0 disables
