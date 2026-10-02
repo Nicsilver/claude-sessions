@@ -126,7 +126,7 @@ pub fn record(state: &str) {
     }
 
     if state == "done" {
-        let (verdict, snippet) = classify_turn(&transcript);
+        let (verdict, snippet) = classify_stop(&data, &transcript);
         if verdict == "yourturn" {
             eff = "yourturn".to_string();
             if msg.is_empty() {
@@ -949,6 +949,18 @@ pub fn transcript_title(path: &str) -> String {
 
 // ---- turn classification ----
 
+/// Classify a Stop from the reply Claude Code hands the hook (`last_assistant_message`), falling
+/// back to the transcript on older versions. The transcript can lag the Stop hook by more than
+/// the retry window — mostly on short text-only turns — so it is only the fallback.
+fn classify_stop(data: &Value, transcript: &str) -> (String, String) {
+    let reply = str_of(data, "last_assistant_message");
+    if reply.trim().is_empty() {
+        classify_turn(transcript)
+    } else {
+        classify_turn_text(&reply)
+    }
+}
+
 fn classify_turn(transcript: &str) -> (String, String) {
     let mut text = String::new();
     for _ in 0..12 {
@@ -957,6 +969,11 @@ fn classify_turn(transcript: &str) -> (String, String) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if text.is_empty() {
+        // The reply has not reached the transcript yet. Stay green and let the stale-working
+        // reconcile read the finished transcript, rather than guessing done.
+        return ("working".into(), String::new());
     }
     classify_turn_text(&text)
 }
@@ -1363,6 +1380,52 @@ mod tests {
         ];
         let path = write_temp_jsonl("reconcile-yourturn", &lines);
         assert_eq!(reconcile_stale_working(&path), "yourturn");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn stop_trusts_the_hook_reply_over_a_lagging_transcript() {
+        // Arrange
+        let lines = [user_prompt("flip it when the deploy lands")];
+        let path = write_temp_jsonl("stop-lagging", &lines);
+        let data = json!({"last_assistant_message": "Waiting on the deploy watcher.\n\n◐"});
+
+        // Act
+        let verdict = classify_stop(&data, &path);
+
+        // Assert
+        assert_eq!(verdict.0, "working");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn stop_reads_the_transcript_when_the_hook_has_no_reply() {
+        // Arrange
+        let lines = [
+            user_prompt("which db?"),
+            assistant_text("Postgres or SQLite?\n○"),
+        ];
+        let path = write_temp_jsonl("stop-fallback", &lines);
+
+        // Act
+        let verdict = classify_stop(&json!({}), &path);
+
+        // Assert
+        assert_eq!(verdict, ("yourturn".into(), "Postgres or SQLite?".into()));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn stop_stays_working_when_the_reply_never_reaches_the_transcript() {
+        // Arrange
+        let lines = [user_prompt("flip it when the deploy lands")];
+        let path = write_temp_jsonl("stop-missing", &lines);
+
+        // Act
+        let verdict = classify_stop(&json!({}), &path);
+
+        // Assert
+        assert_eq!(verdict.0, "working");
         let _ = std::fs::remove_file(&path);
     }
 
