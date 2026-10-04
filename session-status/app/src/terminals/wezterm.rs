@@ -249,13 +249,15 @@ fn live_instance() -> Option<i64> {
 struct Pane {
     id: i64,
     window: i64,
-    name: String,
+    /// The OSC title Claude writes — the same string the recorder stores as `tab_title`.
+    title: String,
+    /// What the tab bar displays: an explicit tab title (set-tab-title) if any, else `title`.
+    tab: String,
     tty: String,
 }
 
-/// One entry per pane, in mux order. Name prefers the explicit tab title over the OSC title
-/// the shell/Claude sets, mirroring what the tab bar displays. tty is the pane's pty device
-/// ("/dev/ttys007"); absent on Windows, where it stays empty.
+/// One entry per pane, in mux order. tty is the pane's pty device ("/dev/ttys007"); absent on
+/// Windows, where it stays empty.
 fn panes(term_pid: i64) -> Vec<Pane> {
     let Some(json) = cli(term_pid, &["list", "--format", "json"]) else {
         return Vec::new();
@@ -270,7 +272,8 @@ fn panes(term_pid: i64) -> Vec<Pane> {
             Pane {
                 id: p.get("pane_id").and_then(Value::as_i64).unwrap_or(-1),
                 window: p.get("window_id").and_then(Value::as_i64).unwrap_or(0),
-                name: if tab.is_empty() { title } else { tab }.to_string(),
+                title: title.to_string(),
+                tab: if tab.is_empty() { title } else { tab }.to_string(),
                 tty: p
                     .get("tty_name")
                     .and_then(Value::as_str)
@@ -307,8 +310,13 @@ fn find_session_pane(s: &Sess) -> Option<i64> {
     if target.is_empty() {
         return None;
     }
-    let names: Vec<String> = panes.iter().map(|p| p.name.clone()).collect();
-    tabmatch::choose(&names, &target).map(|i| panes[i].id)
+    // OSC titles first: an explicit tab name (e.g. the project, set via set-tab-title) hides
+    // Claude's title from the tab bar but not from the pane, and it shares no words with it.
+    let titles: Vec<String> = panes.iter().map(|p| p.title.clone()).collect();
+    let tabs: Vec<String> = panes.iter().map(|p| p.tab.clone()).collect();
+    tabmatch::choose(&titles, &target)
+        .or_else(|| tabmatch::choose(&tabs, &target))
+        .map(|i| panes[i].id)
 }
 
 fn activate_session_pane(s: &Sess) -> bool {

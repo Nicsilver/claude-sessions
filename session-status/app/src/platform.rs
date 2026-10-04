@@ -304,6 +304,26 @@ mod imp {
 
     /// Attach to the launching console so CLI subcommand output (install/uninstall/markers) is
     /// visible — release builds use the windows subsystem, which detaches stdio.
+    /// Make a window's client area see-through via an empty DWM blur-behind region — the same
+    /// call tao makes once at creation for `transparent` windows.
+    pub fn enable_transparency(h: HWND) {
+        use windows_sys::Win32::Graphics::Dwm::{
+            DwmEnableBlurBehindWindow, DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND,
+        };
+        use windows_sys::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject};
+        unsafe {
+            let region = CreateRectRgn(0, 0, -1, -1);
+            let bb = DWM_BLURBEHIND {
+                dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
+                fEnable: 1,
+                hRgnBlur: region,
+                fTransitionOnMaximized: 0,
+            };
+            DwmEnableBlurBehindWindow(h, &bb);
+            DeleteObject(region);
+        }
+    }
+
     pub fn attach_parent_console() {
         unsafe {
             AttachConsole(ATTACH_PARENT_PROCESS);
@@ -590,4 +610,4 @@ mod tests {
 pub use imp::process_map;
 pub use imp::{annotate, attach_parent_console, is_alive, parent_pid, process_start};
 #[cfg(windows)]
-pub use imp::{focus_window, main_window_for_pid};
+pub use imp::{enable_transparency, focus_window, main_window_for_pid};

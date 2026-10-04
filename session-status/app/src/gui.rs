@@ -193,6 +193,11 @@ fn window_upkeep(win: &tauri::WebviewWindow) {
     *last = Some(fp);
     drop(last);
 
+    #[cfg(windows)]
+    if changed || transparency_due() {
+        rearm_transparency(win.app_handle());
+    }
+
     // Layout changed: macOS has likely relocated the window. Snap back to the remembered spot
     // (or the corner if that monitor is gone) and don't trust positions for a few seconds.
     if changed {
@@ -217,6 +222,42 @@ fn window_upkeep(win: &tauri::WebviewWindow) {
     if let Ok(pos) = win.outer_position() {
         if on_some_monitor(win, pos.x, pos.y) && saved_position() != Some((pos.x, pos.y)) {
             write_config(|root| root["window_pos"] = json!({ "x": pos.x, "y": pos.y }));
+        }
+    }
+}
+
+/// Wall-clock time of the last heartbeat, and heartbeats since the last re-arm.
+#[cfg(windows)]
+static REARM_CLOCK: Mutex<(Option<std::time::SystemTime>, u32)> = Mutex::new((None, 0));
+
+/// Whether to re-apply transparency this heartbeat: after a wall-clock gap (the machine slept —
+/// SystemTime, since Instant may not advance across sleep) or every ~30s as a catch-all for a
+/// DWM restart nothing else reveals (a display waking without a layout change).
+#[cfg(windows)]
+fn transparency_due() -> bool {
+    let now = std::time::SystemTime::now();
+    let mut clock = REARM_CLOCK.lock().unwrap();
+    let slept = clock.0.is_some_and(|prev| {
+        now.duration_since(prev)
+            .is_ok_and(|gap| gap > Duration::from_secs(10))
+    });
+    clock.0 = Some(now);
+    clock.1 += 1;
+    if slept || clock.1 >= 20 {
+        clock.1 = 0;
+        return true;
+    }
+    false
+}
+
+/// DWM drops a window's blur-behind state when composition restarts (sleep/resume, a display
+/// waking) and tao never re-applies it (its own FIXME on WM_DWMCOMPOSITIONCHANGED), so the
+/// transparent gutter around the panel turns solid black until relaunch.
+#[cfg(windows)]
+fn rearm_transparency(app: &tauri::AppHandle) {
+    for win in app.webview_windows().values() {
+        if let Ok(h) = win.hwnd() {
+            crate::platform::enable_transparency(h.0);
         }
     }
 }
