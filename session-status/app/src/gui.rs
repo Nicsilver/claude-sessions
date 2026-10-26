@@ -52,6 +52,10 @@ pub fn run() -> tauri::Result<()> {
                 prevent_app_nap();
             }
             setup_tray(app.handle())?;
+            #[cfg(windows)]
+            for win in app.webview_windows().values() {
+                watch_webview_crashes(win);
+            }
             register_hotkeys(app.handle());
             offer_marker_upgrade(app.handle());
             // Auto-hide is a level check exactly once, at startup: launching at login with
@@ -260,6 +264,81 @@ fn rearm_transparency(app: &tauri::AppHandle) {
             crate::platform::enable_transparency(h.0);
         }
     }
+}
+
+// ---- WebView2 crash recovery ----
+//
+// When WebView2's browser process dies, the native windows outlive it as blank transparent
+// layers: the panel and tray menu vanish but still swallow clicks where they sit, and nothing
+// ever repaints them. WebView2 only reports this through ProcessFailed and leaves recovery to
+// the host, so we relaunch ourselves — a fresh process gets a fresh browser.
+
+/// Set in the relaunched child, holding the unix time of the crash restart that spawned it.
+#[cfg(windows)]
+const CRASH_RESTART_ENV: &str = "CLAUDE_SESSIONS_CRASH_RESTART";
+
+/// A second crash this soon after a crash restart means WebView2 itself is broken (runtime
+/// mid-update, corrupt profile); relaunching again would just spin.
+#[cfg_attr(not(windows), allow(dead_code))]
+const CRASH_RESTART_COOLDOWN_SECS: u64 = 60;
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn may_crash_restart(last_restart: Option<u64>, now: u64) -> bool {
+    last_restart.is_none_or(|t| now.saturating_sub(t) >= CRASH_RESTART_COOLDOWN_SECS)
+}
+
+#[cfg(windows)]
+fn watch_webview_crashes(win: &tauri::WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::*;
+    use webview2_com::ProcessFailedEventHandler;
+
+    let app = win.app_handle().clone();
+    let _ = win.with_webview(move |wv| unsafe {
+        let Ok(core) = wv.controller().CoreWebView2() else {
+            return;
+        };
+        let handler = ProcessFailedEventHandler::create(Box::new(move |webview, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
+            args.ProcessFailedKind(&mut kind)?;
+            eprintln!("claude-sessions: WebView2 process failed (kind {})", kind.0);
+            if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED {
+                recover_from_dead_browser(&app);
+            } else if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
+                || kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE
+            {
+                // The browser survived, so a reload brings the page back in place.
+                if let Some(webview) = webview {
+                    webview.Reload()?;
+                }
+            }
+            // GPU/utility/frame failures are restarted by WebView2 itself.
+            Ok(())
+        }));
+        let mut token = 0i64;
+        let _ = core.add_ProcessFailed(&handler, &mut token);
+    });
+}
+
+#[cfg(windows)]
+fn recover_from_dead_browser(app: &tauri::AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    // Both webviews share the one browser process, so its death fires once per window.
+    static RECOVERING: AtomicBool = AtomicBool::new(false);
+    if RECOVERING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let now = model::now() as u64;
+    let last = std::env::var(CRASH_RESTART_ENV)
+        .ok()
+        .and_then(|v| v.parse().ok());
+    if may_crash_restart(last, now) {
+        std::env::set_var(CRASH_RESTART_ENV, now.to_string());
+        app.restart();
+    }
+    // Exiting still beats leaving dead windows that eat clicks.
+    eprintln!("claude-sessions: WebView2 died again right after a restart; exiting");
+    app.exit(1);
 }
 
 /// Show the panel where the user left it. Placed on both sides of `show`: macOS quietly drops a
@@ -918,6 +997,24 @@ mod tests {
         assert!(point_on_any(&SCREENS[..1], 0, 0));
         assert!(!point_on_any(&SCREENS[..1], 1512, 0));
         assert!(!point_on_any(&SCREENS[..1], 0, 982));
+    }
+
+    #[test]
+    fn first_crash_restarts() {
+        assert!(may_crash_restart(None, 1_000));
+    }
+
+    #[test]
+    fn a_crash_right_after_a_crash_restart_does_not_loop() {
+        assert!(!may_crash_restart(Some(1_000), 1_030));
+    }
+
+    #[test]
+    fn a_crash_long_after_the_last_restart_restarts_again() {
+        assert!(may_crash_restart(
+            Some(1_000),
+            1_000 + CRASH_RESTART_COOLDOWN_SECS
+        ));
     }
 
     #[test]

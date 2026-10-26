@@ -39,6 +39,8 @@ windows = { version = "0.61", features = [
     "Win32_System_Variant",
     "Win32_UI_Accessibility",
 ] }
+# Same 0.38 wry compiles; used to hear WebView2's ProcessFailed event, which wry doesn't surface.
+webview2-com = "0.38"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
