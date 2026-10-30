@@ -14,6 +14,16 @@ mod selfinstall;
 mod styles;
 mod terminals;
 
+use std::io::Write;
+
+const USAGE: &str = "\
+usage: claude-sessions [command]
+  (none)              launch the widget
+  record <state>      hook entry point: record a session state from stdin
+  install|uninstall   wire / unwire the Claude Code hooks in ~/.claude/settings.json
+  markers             add or upgrade the turn-marker block in ~/.claude/CLAUDE.md
+  install-app|uninstall-app, focus <id>, new-session [terminal], ai-label <id>";
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -89,6 +99,14 @@ fn main() {
             } else {
                 1
             })
+        }
+        // Without this, any unknown argument (`--help` included) launches the GUI and, on a
+        // first run, wires the hooks — surprising for someone who only asked for help.
+        Some("-h" | "--help" | "help") => {
+            platform::attach_parent_console();
+            // writeln, not println: `--help | head` closes the pipe early and println panics.
+            let _ = writeln!(std::io::stdout(), "{USAGE}");
+            std::process::exit(0)
         }
         // Default (double-click): launch the floating dashboard + tray.
         _ => {
